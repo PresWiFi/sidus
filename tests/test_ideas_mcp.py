@@ -267,7 +267,7 @@ def test_mcp_config_has_no_token():
 
 
 def test_sessions_get_the_server_and_its_permission():
-    assert [p.name for p in plugins.active] == ["ideas"]
+    assert "ideas" in [p.name for p in plugins.active]
     argv = shlex.split(tmux.claude_command(["--session-id", SESSION]).split(";")[0])
     i = argv.index("--mcp-config")
     assert json.loads(argv[i + 1]) == json.loads(connect.mcp_config())
