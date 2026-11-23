@@ -1,26 +1,29 @@
-"""Test setup. Hangar reads its settings from env vars at import time, so set them before importing it."""
+"""Test setup. Sidus reads its settings from env vars at import time, so set them before importing it."""
 import os
 import tempfile
 from pathlib import Path
 
-_TMP = Path(tempfile.mkdtemp(prefix="hangar-test-"))
+_TMP = Path(tempfile.mkdtemp(prefix="sidus-test-"))
 WORKSPACE = _TMP / "workspace"
 WORKSPACE.mkdir()
+# Drop the host's settings (this may run inside a Sidus container), including pre-rename HANGAR_ names.
+for _k in [k for k in os.environ if k.startswith(("SIDUS_", "HANGAR_"))]:
+    del os.environ[_k]
 os.environ.update({
-    "HANGAR_DATA_DIR": str(_TMP / "data"),
+    "SIDUS_DATA_DIR": str(_TMP / "data"),
     "CLAUDE_CONFIG_DIR": str(_TMP / "claude"),
-    "HANGAR_PASSWORD": "test-password",
-    "HANGAR_WORKSPACES": str(WORKSPACE),
-    "HANGAR_TMUX_SOCKET": str(_TMP / "tmux.sock"),
-    "HANGAR_PLUGINS": "ideas",
+    "SIDUS_PASSWORD": "test-password",
+    "SIDUS_WORKSPACES": str(WORKSPACE),
+    "SIDUS_TMUX_SOCKET": str(_TMP / "tmux.sock"),
+    "SIDUS_PLUGINS": "ideas",
 })
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from hangar import auth  # noqa: E402
-from hangar.app import app  # noqa: E402
-from hangar.ideas import db, token  # noqa: E402
+from sidus import auth  # noqa: E402
+from sidus.app import app  # noqa: E402
+from sidus.ideas import db, token  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -29,7 +32,7 @@ def fresh_db(tmp_path):
     yield
 
 
-# Clients are not used as context managers, so Hangar's startup (usage poller, tmux restore) never runs.
+# Clients are not used as context managers, so Sidus's startup (usage poller, tmux restore) never runs.
 
 @pytest.fixture
 def anon():
@@ -38,8 +41,8 @@ def anon():
 
 @pytest.fixture
 def client():
-    """The web UI: signed-in cookie plus the X-Hangar header."""
-    c = TestClient(app, headers={"X-Hangar": "1"})
+    """The web UI: signed-in cookie plus the X-Sidus header."""
+    c = TestClient(app, headers={"X-Sidus": "1"})
     c.cookies.set(auth.COOKIE, auth.make_token())
     return c
 

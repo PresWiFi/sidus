@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from hangar import schedules, store, tmux
+from sidus import schedules, store, tmux
 from tests.test_codex_sessions import started, tmux_calls  # noqa: F401 - fixture
 
 T = dt.datetime
@@ -192,7 +192,7 @@ def test_tick(fake, workspace):
     assert schedules.tick(due - 1) == []
     assert schedules.tick(due + 5) == [t["id"]]
     assert schedules.get(t["id"])["next_run"] == due + 3600
-    # Hangar was off for an hour past the next run: logged as missed, not run late.
+    # Sidus was off for an hour past the next run: logged as missed, not run late.
     assert schedules.tick(due + 3600 + schedules.LATE + 60) == []
     assert schedules.runs(t["id"])[0]["result"] == "missed"
 
@@ -252,7 +252,7 @@ def test_unattended_claude_skips_bypass_prompt(tmux_calls, workspace):  # noqa: 
                      unattended=True, prompt="go")
     cmd, _, opts = started(tmux_calls)
     assert "--permission-mode bypassPermissions" in cmd and "skipDangerousModePermissionPrompt" in cmd
-    assert '"task": "abc"' in opts["@hangar_launch"]
+    assert '"task": "abc"' in opts["@sidus_launch"]
     new = next(c for c in tmux_calls if c[0] == "new-session")
     assert new[new.index("-s") + 1] == "hg-task-abc"
 
@@ -270,7 +270,7 @@ def test_codex_resume_with_prompt(tmux_calls, workspace):  # noqa: F811
 
 
 def test_task_on_local_model(fake, workspace):
-    from hangar.providers import ollama
+    from sidus.providers import ollama
     store.kv_set(ollama.KEY, [{"id": "l1", "name": "GPU", "url": "http://10.0.0.7:9931", "kind": "llamacpp",
                                "api_key": "k"}])
     try:

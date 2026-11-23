@@ -6,8 +6,8 @@ import time
 
 import pytest
 
-from hangar.config import settings
-from hangar.providers import github
+from sidus.config import settings
+from sidus.providers import github
 from tests.test_providers import script
 
 

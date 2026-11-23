@@ -5,8 +5,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from hangar import store, tmux
-from hangar.providers import ollama
+from sidus import store, tmux
+from sidus.providers import ollama
 from tests.test_codex_sessions import SID, started, tmux_calls  # noqa: F401 - fixture
 
 
@@ -146,7 +146,7 @@ def test_codex_session_on_llamacpp(tmux_calls, workspace):  # noqa: F811
     assert "-c 'model_providers.llamacpp.base_url=\"http://10.0.0.7:9931/v1\"'" in cmd
     assert "-c 'model_providers.llamacpp.env_key=\"LLAMACPP_API_KEY\"'" in cmd and env["LLAMACPP_API_KEY"] == "sekrit"
     assert "-m qwen3-coder-30b" in cmd and "CODEX_OSS_BASE_URL" not in env
-    assert "sekrit" not in cmd and "sekrit" not in opts["@hangar_launch"]
+    assert "sekrit" not in cmd and "sekrit" not in opts["@sidus_launch"]
 
 
 def test_codex_on_llamacpp_without_key(tmux_calls, workspace):  # noqa: F811
@@ -168,7 +168,7 @@ def test_session_list_tags_llamacpp(tmux_calls, client, workspace, monkeypatch):
     monkeypatch.setattr(ollama, "context_tokens", lambda server, model, timeout=5: None)
     store.kv_set(ollama.KEY, [LLAMA])
     r = client.post("/api/tmux/new", json={"cwd": str(workspace), "ollama_server": "l1", "ollama_model": "m"}).json()
-    from hangar import app as app_module
+    from sidus import app as app_module
     out = app_module._merge({"id": r["claude_id"], "cost": 1.23}, None, None)
     assert out["ollama"] == "m" and out["local_kind"] == "llama.cpp" and out["cost"] is None
 

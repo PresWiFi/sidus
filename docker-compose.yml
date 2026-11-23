@@ -1,8 +1,8 @@
-# Copy .env.example to .env and set WORKSPACE first. The setup code is in `docker compose logs hangar`.
+# Copy .env.example to .env and set WORKSPACE first. The setup code is in `docker compose logs sidus`.
 #   docker compose up -d --build     start
 #   docker compose down              stop (conversations stay resumable)
 services:
-  hangar:
+  sidus:
     build:
       context: .
       args:
@@ -11,39 +11,39 @@ services:
         CLAUDE_VERSION: ${CLAUDE_VERSION:-stable}
         EXTRA_PACKAGES: ${EXTRA_PACKAGES:-}
         ALLOW_SUDO: ${ALLOW_SUDO:-true}
-    image: hangar:local
-    container_name: hangar
-    hostname: ${HANGAR_HOSTNAME:-hangar}
+    image: sidus:local
+    container_name: sidus
+    hostname: ${SIDUS_HOSTNAME:-${HANGAR_HOSTNAME:-sidus}}
     restart: unless-stopped
     ports:
-      - "${HANGAR_BIND:-0.0.0.0}:${HANGAR_PORT:-7878}:7878"
-    # Lets Hangar reach an Ollama running on the Docker host at http://host.docker.internal:11434 (Linux too).
+      - "${SIDUS_BIND:-${HANGAR_BIND:-0.0.0.0}}:${SIDUS_PORT:-${HANGAR_PORT:-7878}}:7878"
+    # Lets Sidus reach an Ollama running on the Docker host at http://host.docker.internal:11434 (Linux too).
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      HANGAR_PASSWORD: ${HANGAR_PASSWORD:-}
-      HANGAR_WORKSPACES: ${WORKSPACE:?Set WORKSPACE in .env}
-      HANGAR_AUTORESTORE: ${HANGAR_AUTORESTORE:-true}
-      HANGAR_HOSTNAME: ${HANGAR_HOSTNAME:-}
-      HANGAR_CLAUDE_ARGS: ${HANGAR_CLAUDE_ARGS:-}
-      HANGAR_MAX_UPLOAD_MB: ${HANGAR_MAX_UPLOAD_MB:-512}
-      HANGAR_PUBLIC_URL: ${HANGAR_PUBLIC_URL:-}
+      SIDUS_PASSWORD: ${SIDUS_PASSWORD:-${HANGAR_PASSWORD:-}}
+      SIDUS_WORKSPACES: ${WORKSPACE:?Set WORKSPACE in .env}
+      SIDUS_AUTORESTORE: ${SIDUS_AUTORESTORE:-${HANGAR_AUTORESTORE:-true}}
+      SIDUS_HOSTNAME: ${SIDUS_HOSTNAME:-${HANGAR_HOSTNAME:-}}
+      SIDUS_CLAUDE_ARGS: ${SIDUS_CLAUDE_ARGS:-${HANGAR_CLAUDE_ARGS:-}}
+      SIDUS_MAX_UPLOAD_MB: ${SIDUS_MAX_UPLOAD_MB:-${HANGAR_MAX_UPLOAD_MB:-512}}
+      SIDUS_PUBLIC_URL: ${SIDUS_PUBLIC_URL:-${HANGAR_PUBLIC_URL:-}}
       TZ: ${TZ:-UTC}
     volumes:
       # Your projects, mounted at the SAME path as on the host. Claude Code files sessions by
       # folder path, so this is what lets sessions started here and on the host resume each other.
       - ${WORKSPACE}:${WORKSPACE}
-      # Claude Code's login, settings, and session history. By default Hangar keeps its own (you sign in
+      # Claude Code's login, settings, and session history. By default Sidus keeps its own (you sign in
       # during setup). To share the host's instead, set CLAUDE_DIR in .env, e.g. CLAUDE_DIR=/home/you/.claude
-      - ${CLAUDE_DIR:-hangar-claude}:/home/hangar/.claude
-      # The container user's home (shell history, Claude's ~/.claude.json) and Hangar's database.
-      - hangar-home:/home/hangar
-      - hangar-data:/data
+      - ${CLAUDE_DIR:-sidus-claude}:/home/sidus/.claude
+      # The container user's home (shell history, Claude's ~/.claude.json) and Sidus's database.
+      - sidus-home:/home/sidus
+      - sidus-data:/data
       # Optional: use your git identity and SSH keys inside sessions.
-      # - ${HOME}/.gitconfig:/home/hangar/.gitconfig:ro
-      # - ${HOME}/.ssh:/home/hangar/.ssh:ro
+      # - ${HOME}/.gitconfig:/home/sidus/.gitconfig:ro
+      # - ${HOME}/.ssh:/home/sidus/.ssh:ro
 
 volumes:
-  hangar-home:
-  hangar-data:
-  hangar-claude:
+  sidus-home:
+  sidus-data:
+  sidus-claude:

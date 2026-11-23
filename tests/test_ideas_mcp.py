@@ -1,4 +1,4 @@
-"""The Ideas MCP server, talking to a real Hangar over HTTP (a uvicorn server on a free local port)."""
+"""The Ideas MCP server, talking to a real Sidus over HTTP (a uvicorn server on a free local port)."""
 import asyncio
 import json
 import os
@@ -12,10 +12,10 @@ import uuid
 import pytest
 import uvicorn
 
-from hangar import plugins, tmux
-from hangar.app import app
-from hangar.ideas import connect, repo, token
-from hangar.ideas import mcp as shim
+from sidus import plugins, tmux
+from sidus.app import app
+from sidus.ideas import connect, repo, token
+from sidus.ideas import mcp as shim
 
 mcp_sdk = pytest.importorskip("mcp")
 from mcp import Client, StdioServerParameters  # noqa: E402
@@ -37,7 +37,7 @@ def _free_port() -> int:
 
 
 @pytest.fixture(scope="module")
-def hangar_url():
+def sidus_url():
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off"))
     thread = threading.Thread(target=server.run, daemon=True)
@@ -52,10 +52,10 @@ def hangar_url():
 
 
 @pytest.fixture
-def env(monkeypatch, hangar_url):
-    monkeypatch.setenv("HANGAR_URL", hangar_url)
-    monkeypatch.setenv("HANGAR_IDEAS_TOKEN_FILE", str(token.path()))
-    monkeypatch.delenv("HANGAR_IDEAS_TOKEN", raising=False)
+def env(monkeypatch, sidus_url):
+    monkeypatch.setenv("SIDUS_URL", sidus_url)
+    monkeypatch.setenv("SIDUS_IDEAS_TOKEN_FILE", str(token.path()))
+    monkeypatch.delenv("SIDUS_IDEAS_TOKEN", raising=False)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", SESSION)
     token.get()
     return monkeypatch
@@ -181,25 +181,25 @@ def test_no_session_id_still_works(env):
 
 # --- failing gracefully ---
 
-def test_hangar_unreachable(env):
-    env.setenv("HANGAR_URL", f"http://127.0.0.1:{_free_port()}")
+def test_sidus_unreachable(env):
+    env.setenv("SIDUS_URL", f"http://127.0.0.1:{_free_port()}")
     start = time.time()
     err, text = call("ideas_list")
-    assert err and "Can't reach Hangar" in text
+    assert err and "Can't reach Sidus" in text
     assert time.time() - start < 5
 
 
-def test_hangar_hangs(env):
+def test_sidus_hangs(env):
     """A server that accepts the connection but never answers: the call times out instead of hanging."""
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen()
-    env.setenv("HANGAR_URL", f"http://127.0.0.1:{listener.getsockname()[1]}")
+    env.setenv("SIDUS_URL", f"http://127.0.0.1:{listener.getsockname()[1]}")
     env.setattr(shim, "TIMEOUT", 1)
     try:
         start = time.time()
         err, text = call("ideas_list")
-        assert err and "Can't reach Hangar" in text
+        assert err and "Can't reach Sidus" in text
         assert time.time() - start < 5
     finally:
         listener.close()
@@ -208,21 +208,21 @@ def test_hangar_hangs(env):
 def test_wrong_token(env, tmp_path):
     bad = tmp_path / "token"
     bad.write_text("wrong\n")
-    env.setenv("HANGAR_IDEAS_TOKEN_FILE", str(bad))
+    env.setenv("SIDUS_IDEAS_TOKEN_FILE", str(bad))
     err, text = call("ideas_list")
     assert err and "refused the Ideas token" in text
     assert "wrong" not in text
 
 
 def test_missing_token(env, tmp_path):
-    env.setenv("HANGAR_IDEAS_TOKEN_FILE", str(tmp_path / "missing"))
+    env.setenv("SIDUS_IDEAS_TOKEN_FILE", str(tmp_path / "missing"))
     err, text = call("ideas_list")
     assert err and "no token found" in text
 
 
 def test_token_from_env_wins(env):
-    env.setenv("HANGAR_IDEAS_TOKEN", token.get())
-    env.setenv("HANGAR_IDEAS_TOKEN_FILE", "/nonexistent")
+    env.setenv("SIDUS_IDEAS_TOKEN", token.get())
+    env.setenv("SIDUS_IDEAS_TOKEN_FILE", "/nonexistent")
     assert ok("ideas_list")["total"] == 0
 
 
@@ -237,10 +237,10 @@ def test_proxy_settings_are_ignored(env):
 # --- how Claude Code starts it ---
 
 def test_stdio_server_from_the_generated_config(env, tmp_path):
-    """Start `python -m hangar.ideas.mcp` exactly as the MCP config says, from an unrelated folder."""
+    """Start `python -m sidus.ideas.mcp` exactly as the MCP config says, from an unrelated folder."""
     entry = json.loads(connect.mcp_config())["mcpServers"][connect.SERVER]
     environ = {"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path), **entry["env"],
-               "HANGAR_URL": os.environ["HANGAR_URL"], "CLAUDE_CODE_SESSION_ID": SESSION}
+               "SIDUS_URL": os.environ["SIDUS_URL"], "CLAUDE_CODE_SESSION_ID": SESSION}
     params = StdioServerParameters(command=entry["command"], args=entry["args"], env=environ, cwd=str(tmp_path))
 
     async def run():
@@ -259,10 +259,10 @@ def test_stdio_server_from_the_generated_config(env, tmp_path):
 def test_mcp_config_has_no_token():
     text = connect.mcp_config()
     assert token.get() not in text
-    entry = json.loads(text)["mcpServers"]["hangar-ideas"]
+    entry = json.loads(text)["mcpServers"]["sidus-ideas"]
     assert entry["command"] == sys.executable
-    assert entry["args"] == ["-m", "hangar.ideas.mcp"]
-    assert entry["env"]["HANGAR_IDEAS_TOKEN_FILE"] == str(token.path())
+    assert entry["args"] == ["-m", "sidus.ideas.mcp"]
+    assert entry["env"]["SIDUS_IDEAS_TOKEN_FILE"] == str(token.path())
     assert entry["env"]["PYTHONPATH"] == str(connect.ROOT)
 
 
@@ -271,17 +271,17 @@ def test_sessions_get_the_server_and_its_permission():
     argv = shlex.split(tmux.claude_command(["--session-id", SESSION]).split(";")[0])
     i = argv.index("--mcp-config")
     assert json.loads(argv[i + 1]) == json.loads(connect.mcp_config())
-    assert argv[argv.index("--allowedTools") + 1] == "mcp__hangar-ideas__*"
+    assert argv[argv.index("--allowedTools") + 1] == "mcp__sidus-ideas__*"
     assert argv.index("--allowedTools") < argv.index("--session-id")  # flags first; nothing after them to swallow
 
 
-def test_hangar_url_for_bind_addresses(monkeypatch):
+def test_sidus_url_for_bind_addresses(monkeypatch):
     for host, url in [("0.0.0.0", "http://127.0.0.1:7878"), ("::", "http://127.0.0.1:7878"),
                       ("127.0.0.1", "http://127.0.0.1:7878"), ("::1", "http://[::1]:7878"),
-                      ("hangar.local", "http://hangar.local:7878")]:
+                      ("sidus.local", "http://sidus.local:7878")]:
         monkeypatch.setattr(connect.settings, "host", host)
         monkeypatch.setattr(connect.settings, "port", 7878)
-        assert connect.hangar_url() == url
+        assert connect.sidus_url() == url
 
 
 def test_connect_command_is_web_ui_only(client, mcp, anon):
@@ -290,6 +290,6 @@ def test_connect_command_is_web_ui_only(client, mcp, anon):
     r = client.get("/api/ideas/connect").json()
     argv = shlex.split(r["command"])
     assert argv[:7] == ["claude", "mcp", "add", "--scope", "user", "--transport", "stdio"]
-    assert f"HANGAR_IDEAS_TOKEN={token.get()}" in argv
-    assert argv[argv.index("--") - 1] == "hangar-ideas"
-    assert argv[-2:] == ["-m", "hangar.ideas.mcp"]
+    assert f"SIDUS_IDEAS_TOKEN={token.get()}" in argv
+    assert argv[argv.index("--") - 1] == "sidus-ideas"
+    assert argv[-2:] == ["-m", "sidus.ideas.mcp"]

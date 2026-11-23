@@ -1,0 +1,12 @@
+# Upgrading a Docker install from Hangar (Sidus's old name): keeps the volumes Hangar created, so your
+# database, login, and container home carry over. Add it to .env:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.from-hangar.yml
+# Volume names start with the folder Hangar ran from ("hangar" by default). If yours differs (see
+# `docker volume ls`), also set HANGAR_PROJECT=<folder name> in .env.
+volumes:
+  sidus-home:
+    name: ${HANGAR_PROJECT:-hangar}_hangar-home
+  sidus-data:
+    name: ${HANGAR_PROJECT:-hangar}_hangar-data
+  sidus-claude:
+    name: ${HANGAR_PROJECT:-hangar}_hangar-claude

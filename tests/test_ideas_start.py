@@ -3,8 +3,8 @@ import shlex
 
 import pytest
 
-from hangar import tmux
-from hangar.ideas import api
+from sidus import tmux
+from sidus.ideas import api
 
 BASE = "/api/ideas"
 SID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"

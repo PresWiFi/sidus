@@ -1,0 +1,739 @@
+"""Sidus web server."""
+from __future__ import annotations
+
+import asyncio
+import os
+from contextlib import asynccontextmanager
+from pathlib import Path
+from urllib.parse import urlencode, urlparse
+
+from fastapi import FastAPI, HTTPException, Request, WebSocket
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from . import __version__, auth, files, oidc, plugins, store, tmux
+from .providers.api import router as providers_router
+from .schedule_api import router as schedules_router
+from . import schedules
+from .config import settings
+from .codex_sessions import codex_index
+from .codex_usage import _auth as codex_chatgpt_auth, codex_poller, newest as newest_codex_usage
+from .providers.claude import _credentials as claude_credentials
+from .codex_sessions import transcript as codex_transcript
+from .providers import ollama as ollama_servers
+from .sessions import index, transcript
+from .store import all_meta, set_meta
+from .usage import poller
+
+STATIC = Path(__file__).with_name("static")
+PUBLIC_API = {"/api/login", "/api/me", "/api/auth/state", "/api/setup", "/api/auth/oidc/start", "/api/auth/oidc/callback"}
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    for plugin in PLUGINS:
+        if plugin.startup:
+            await asyncio.to_thread(plugin.startup)
+    poller.start()
+    codex_poller.start()
+    await asyncio.to_thread(index.refresh, 0)
+    await asyncio.to_thread(tmux.snapshot_for_restore)
+    if settings.autorestore:
+        started = await asyncio.to_thread(tmux.restore, _resumable)
+        if started:
+            print(f"Restored {len(started)} session(s)", flush=True)
+    tracker = asyncio.create_task(_track_open_sessions())  # keep a reference so it is not garbage-collected
+    scheduler = asyncio.create_task(_run_schedules())
+    print(f"Sidus {__version__} on http://{settings.host}:{settings.port}", flush=True)
+    for line in auth.startup_lines():
+        print(line, flush=True)
+    yield
+    tracker.cancel()
+    scheduler.cancel()
+
+
+async def _track_open_sessions() -> None:
+    """Keep the list of open sessions current even when no browser is polling, so restore works."""
+    while True:
+        await asyncio.sleep(15)
+        try:
+            await asyncio.to_thread(tmux.list_sessions)
+        except Exception:
+            pass
+
+
+async def _run_schedules() -> None:
+    """Starts scheduled tasks when they're due."""
+    while True:
+        await asyncio.sleep(20)
+        try:
+            await asyncio.to_thread(schedules.tick)
+        except Exception as e:  # noqa: BLE001 - keep the scheduler alive; the next tick tries again
+            print(f"Scheduled tasks: {e}", flush=True)
+
+
+def _resumable(claude_id: str) -> bool:
+    s = index.get(claude_id) or codex_index.get(claude_id)
+    return bool(s and (s.prompts or s.replies))
+
+
+def _find(sid: str):
+    """A conversation from either agent's logs."""
+    return index.get(sid) or codex_index.get(sid)
+
+
+app = FastAPI(title="Sidus", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
+PLUGINS = plugins.load(settings.plugins)
+plugins.active[:] = PLUGINS
+app.include_router(providers_router)
+app.include_router(schedules_router)
+for _plugin in PLUGINS:
+    app.include_router(_plugin.router)
+
+
+def _authed(request_or_ws) -> bool:
+    return auth.cookie_ok(request_or_ws.cookies)
+
+
+@app.middleware("http")
+async def guard(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api/") and path not in PUBLIC_API and not _plugin_authorized(request, path):
+        if not _authed(request):
+            return JSONResponse({"detail": "Sign in required"}, status_code=401)
+        # Custom header blocks cross-site form posts (browsers can't add it without a CORS preflight).
+        if request.method not in ("GET", "HEAD") and "1" not in (request.headers.get("x-sidus"), request.headers.get("x-hangar")):
+            return JSONResponse({"detail": "Missing X-Sidus header"}, status_code=403)
+    response = await call_next(request)
+    if path == "/" or path.endswith((".js", ".css", ".html")):
+        response.headers["Cache-Control"] = "no-cache"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+def _plugin_authorized(request: Request, path: str) -> bool:
+    """A plugin's own sign-in (e.g. a bearer token), valid only under that plugin's /api/<name>/ prefix."""
+    return any(p.authorize and path.startswith(p.prefix) and p.authorize(request) for p in PLUGINS)
+
+
+def _err(e: Exception, code: int = 400):
+    raise HTTPException(status_code=code, detail=str(e))
+
+
+# ---------- auth ----------
+
+def _ip(request: Request) -> str:
+    return request.client.host if request.client else "?"
+
+
+def _signed_in(resp: JSONResponse, request: Request) -> JSONResponse:
+    resp.set_cookie(auth.COOKIE, auth.make_token(), max_age=auth.MAX_AGE, httponly=True, samesite="lax",
+                    secure=settings.secure_cookies or request.url.scheme == "https")
+    return resp
+
+
+@app.get("/api/auth/state")
+async def auth_state():
+    """What the sign-in screen should show. Public, so it must not reveal anything useful."""
+    return {"setup": auth.setup_needed(), "username_hint": auth.username_hint(),
+            "password": oidc.password_login_enabled(), "oidc": {"label": oidc.label()} if oidc.ready() else None}
+
+
+_setup_lock = asyncio.Lock()
+
+
+class Setup(BaseModel):
+    code: str
+    username: str
+    password: str
+
+
+@app.post("/api/setup")
+async def setup(body: Setup, request: Request):
+    if not auth.setup_needed():
+        raise HTTPException(409, "Sidus is already set up. Sign in instead.")
+    if not auth.allow_attempt(_ip(request)):
+        raise HTTPException(429, "Too many attempts. Wait a few minutes.")
+    if not auth.check_setup_code(body.code):
+        await asyncio.sleep(0.6)
+        raise HTTPException(401, "Wrong setup code. Check Sidus's log for the current one.")
+    try:
+        username = auth.check_username(body.username)
+        auth.check_new_password(body.password)
+    except ValueError as e:
+        _err(e)
+    async with _setup_lock:
+        if not auth.setup_needed():
+            raise HTTPException(409, "Sidus is already set up. Sign in instead.")
+        await asyncio.to_thread(auth.create_owner, username, body.password)
+        store.kv_set("onboarding_pending", True)  # the welcome page offers to link AI providers next
+    print(f'Setup done: owner account "{username}" created.', flush=True)
+    return _signed_in(JSONResponse({"ok": True}), request)
+
+
+class Login(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/login")
+async def login(body: Login, request: Request):
+    if auth.setup_needed():
+        raise HTTPException(409, "Sidus isn't set up yet.")
+    if not oidc.password_login_enabled():
+        raise HTTPException(403, f"Password sign-in is turned off. Use Sign in with {oidc.label()}.")
+    if not auth.allow_attempt(_ip(request)):
+        raise HTTPException(429, "Too many attempts. Wait a few minutes.")
+    if not await asyncio.to_thread(auth.check_login, body.username, body.password):
+        await asyncio.sleep(0.6)
+        raise HTTPException(401, "Wrong username or password")
+    return _signed_in(JSONResponse({"ok": True}), request)
+
+
+@app.post("/api/logout")
+async def logout():
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(auth.COOKIE)
+    resp.delete_cookie(auth.OLD_COOKIE)
+    return resp
+
+
+# ---------- sign in with an OIDC provider ----------
+
+def _secure(request: Request) -> bool:
+    return settings.secure_cookies or request.url.scheme == "https"
+
+
+def _to_app(request: Request, fragment: str = "", **query) -> RedirectResponse:
+    resp = RedirectResponse("/" + ("?" + urlencode(query) if query else "") + fragment, status_code=303)
+    resp.delete_cookie(oidc.STATE_COOKIE, path="/api/auth/oidc")
+    return resp
+
+
+def _oidc_redirect(url: str, state: str, request: Request) -> RedirectResponse:
+    resp = RedirectResponse(url, status_code=303)
+    # Lax still sends it on the top-level redirect back from the provider.
+    resp.set_cookie(oidc.STATE_COOKIE, state, max_age=oidc.STATE_TTL, httponly=True, samesite="lax",
+                    secure=_secure(request), path="/api/auth/oidc")
+    return resp
+
+
+@app.get("/api/auth/oidc/start")
+async def oidc_start(request: Request, here: str = ""):
+    if not oidc.ready():
+        return _to_app(request, oidc_error="Sign-in with a provider isn't set up.")
+    home = _origin_of(oidc.config().get("redirect_uri", ""))
+    if home and home != _origin(request) and not here:  # `here` stops a loop if a proxy hides the real address
+        # The provider sends people back to the registered address, so start there (that's where the
+        # state cookie must be, and where the sign-in cookie should end up).
+        return RedirectResponse(f"{home}/api/auth/oidc/start?here=1", status_code=303)
+    if not auth.allow_attempt(_ip(request)):
+        return _to_app(request, oidc_error="Too many attempts. Wait a few minutes.")
+    try:
+        url, state = await asyncio.to_thread(oidc.start, "login")
+    except oidc.OIDCError as e:
+        return _to_app(request, oidc_error=str(e))
+    return _oidc_redirect(url, state, request)
+
+
+@app.get("/api/oidc/link")
+async def oidc_link_start(request: Request):
+    """Signed-in owner only (cookie). A GET so the browser can navigate to it; it changes nothing by itself."""
+    try:
+        url, state = await asyncio.to_thread(oidc.start, "link")
+    except oidc.OIDCError as e:
+        return _to_app(request, oidc_error=str(e))
+    return _oidc_redirect(url, state, request)
+
+
+@app.get("/api/auth/oidc/callback")
+async def oidc_callback(request: Request, state: str = "", code: str = "", error: str = "",
+                        error_description: str = ""):
+    if error:
+        with oidc._lock:
+            oidc._pending.pop(state, None)
+        return _to_app(request, oidc_error=f"The provider said: {error_description or error}"[:300])
+    try:
+        mode, ident = await asyncio.to_thread(oidc.finish, state, request.cookies.get(oidc.STATE_COOKIE), code)
+    except oidc.OIDCError as e:
+        return _to_app(request, oidc_error=str(e)[:300])
+    if mode == "link":
+        if not _authed(request):  # linking needs the owner already signed in, in this browser
+            return _to_app(request, oidc_error="Sign in to Sidus first, then link from Settings.")
+        oidc.link(ident)
+        return _to_app(request, fragment="#/settings", oidc="linked")
+    if not oidc.matches_linked(ident):
+        who = ident.get("email") or ident.get("name") or "that account"
+        return _to_app(request, oidc_error=f"{who} isn't the identity linked to this Sidus.")
+    resp = _to_app(request)
+    resp.set_cookie(auth.COOKIE, auth.make_token(), max_age=auth.MAX_AGE, httponly=True, samesite="lax",
+                    secure=_secure(request))
+    return resp
+
+
+@app.get("/api/oidc")
+async def oidc_get(request: Request):
+    return {**oidc.public_config(), "suggested_redirect_uri": f"{_origin(request)}/api/auth/oidc/callback",
+            "current_origin": _origin(request), "public_url": settings.public_url or None}
+
+
+def _origin(request: Request) -> str:
+    """Sidus's address as the browser sees it: SIDUS_PUBLIC_URL, else what a reverse proxy forwarded
+    (Tailscale serve, Caddy, nginx), else the Host header."""
+    if settings.public_url:
+        return settings.public_url
+    first = lambda v: (v or "").split(",")[0].strip()  # noqa: E731
+    host = first(request.headers.get("x-forwarded-host")) or request.headers.get("host") or request.url.netloc
+    scheme = first(request.headers.get("x-forwarded-proto")) or request.url.scheme
+    return f"{scheme}://{host}"
+
+
+def _origin_of(url: str) -> str:
+    u = urlparse(url or "")
+    return f"{u.scheme}://{u.netloc}"
+
+
+class OIDCIn(BaseModel):
+    preset: str = "generic"
+    issuer: str
+    client_id: str
+    client_secret: str | None = None   # empty keeps the saved one
+    redirect_uri: str
+    label: str = ""
+
+
+@app.put("/api/oidc")
+async def oidc_put(body: OIDCIn):
+    try:
+        await asyncio.to_thread(oidc.save, body.preset, body.issuer, body.client_id, body.client_secret,
+                                body.redirect_uri, body.label)
+    except oidc.OIDCError as e:
+        _err(e)
+    return oidc.public_config()
+
+
+class PasswordLoginIn(BaseModel):
+    enabled: bool
+
+
+@app.post("/api/oidc/password-login")
+async def oidc_password_login(body: PasswordLoginIn):
+    try:
+        oidc.set_password_login(body.enabled)
+    except oidc.OIDCError as e:
+        _err(e)
+    return oidc.public_config()
+
+
+@app.post("/api/oidc/unlink")
+async def oidc_unlink():
+    oidc.unlink()
+    return oidc.public_config()
+
+
+@app.delete("/api/oidc")
+async def oidc_delete():
+    oidc.remove()
+    return oidc.public_config()
+
+
+# ---------- account ----------
+
+@app.get("/api/account")
+async def account():
+    o = auth.owner()
+    return {"username": o["username"], "created": o.get("created"), "source": o.get("source"),
+            "password_changed": o.get("password_changed"), "env_password": bool(settings.password),
+            "min_password": auth.MIN_PASSWORD}
+
+
+class PasswordChange(BaseModel):
+    current: str
+    new: str
+
+
+@app.post("/api/account/password")
+async def change_password(body: PasswordChange, request: Request):
+    o = auth.owner()
+    if not await asyncio.to_thread(auth.verify_password, body.current, o["pw_hash"]):
+        await asyncio.sleep(0.6)
+        raise HTTPException(401, "Current password is wrong")
+    try:
+        auth.check_new_password(body.new)
+    except ValueError as e:
+        _err(e)
+    await asyncio.to_thread(auth.set_password, body.new)
+    return _signed_in(JSONResponse({"ok": True}), request)  # other devices are now signed out
+
+
+class UsernameChange(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/account/username")
+async def change_username(body: UsernameChange):
+    o = auth.owner()
+    if not await asyncio.to_thread(auth.verify_password, body.password, o["pw_hash"]):
+        await asyncio.sleep(0.6)
+        raise HTTPException(401, "Password is wrong")
+    try:
+        username = auth.check_username(body.username)
+    except ValueError as e:
+        _err(e)
+    auth.set_username(username)
+    return {"ok": True, "username": username}
+
+
+@app.post("/api/onboarding/done")
+async def onboarding_done():
+    store.kv_set("onboarding_pending", False)
+    return {"ok": True}
+
+
+@app.post("/api/account/signout-all")
+async def signout_all(request: Request):
+    auth.sign_out_everywhere()
+    return _signed_in(JSONResponse({"ok": True}), request)
+
+
+@app.get("/api/me")
+async def me(request: Request):
+    if not _authed(request):
+        return JSONResponse({"authed": False}, status_code=401)
+    return {"authed": True, "version": __version__, "hostname": settings.hostname, "user": auth.owner()["username"],
+            "onboarding": bool(store.kv_get("onboarding_pending")),
+            "workspaces": settings.workspaces,
+            "claude_dir": str(settings.claude_dir), "tmux_socket": settings.tmux_socket or None,
+            "plugins": [p.public() for p in PLUGINS]}
+
+
+# ---------- sessions ----------
+
+def _merge(summary: dict | None, meta: dict | None, live: dict | None) -> dict:
+    out = dict(summary or {})
+    m = meta or {}
+    out["meta"] = {"name": m.get("name"), "pinned": bool(m.get("pinned")), "archived": bool(m.get("archived")),
+                   "notes": m.get("notes")}
+    if m.get("name"):
+        out["title"] = m["name"]
+    out["tmux"] = live
+    launch = tmux.launch_for(out["id"]) if out.get("id") else {}
+    if live and live.get("launch"):
+        launch = {**live["launch"], **launch}
+    out["agent"] = out.get("agent") or (live or {}).get("agent") or launch.get("agent") or "claude"
+    local = launch.get("ollama") or {}
+    out["ollama"] = local.get("model")  # the local model, on Ollama or llama.cpp
+    out["local_kind"] = ollama_servers.label(local.get("kind")) if out["ollama"] else None
+    if out["ollama"]:
+        out["cost"] = None  # Claude Code prices local models as if they were Claude; that number means nothing
+    out["codex_mode"] = launch.get("codex_mode") if out["agent"] == "codex" else None
+    out["task"] = launch.get("task")  # the scheduled task this session belongs to
+    return out
+
+
+@app.get("/api/sessions")
+async def sessions(q: str = ""):
+    claude_list, codex_list, live = await asyncio.gather(
+        asyncio.to_thread(index.list), asyncio.to_thread(codex_index.list), asyncio.to_thread(tmux.list_sessions))
+    summaries = sorted(claude_list + codex_list, key=lambda s: -(s["updated"] or 0))
+    meta = all_meta()
+    by_claude = {t["claude_id"]: t for t in live if t["claude_id"]}
+    matches = None
+    if q:
+        a, b = await asyncio.gather(asyncio.to_thread(index.search, q), asyncio.to_thread(codex_index.search, q))
+        matches = a | b
+    known = set()
+    items = []
+    for s in summaries:
+        known.add(s["id"])
+        if matches is not None and s["id"] not in matches and q.lower() not in (meta.get(s["id"], {}).get("name") or "").lower():
+            continue
+        items.append(_merge(s, meta.get(s["id"]), by_claude.get(s["id"])))
+    # Running tmux sessions without a log yet (new sessions before the first prompt, or plain shells).
+    for t in live:
+        if t["claude_id"] in known:
+            continue
+        if q and q.lower() not in (t["label"] or t["name"]).lower():
+            continue
+        items.insert(0, _merge({"id": t["claude_id"], "title": t["label"] or t["name"], "cwd": t["cwd"],
+                                "project": Path(t["cwd"] or "").name, "updated": t["activity"],
+                                "started": t["created"], "pending": True}, meta.get(t["claude_id"] or ""), t))
+    restorable = [c for c in await asyncio.to_thread(tmux.restore_candidates) if _resumable(c["claude_id"])]
+    return {"sessions": items, "restorable": len(restorable)}
+
+
+@app.get("/api/sessions/{sid}")
+async def session(sid: str):
+    s = await asyncio.to_thread(_find, sid)
+    live = await asyncio.to_thread(tmux.find_by_claude, sid)
+    if not s and not live:
+        raise HTTPException(404, "Session not found")
+    return _merge(s.summary() if s else {"id": sid, "title": live["label"] or live["name"], "cwd": live["cwd"],
+                                         "pending": True}, all_meta().get(sid), live)
+
+
+@app.get("/api/sessions/{sid}/transcript")
+async def session_transcript(sid: str, limit: int = 400):
+    s = await asyncio.to_thread(_find, sid)
+    if not s:
+        return {"items": []}
+    fn = codex_transcript if s.agent == "codex" else transcript
+    return {"items": await asyncio.to_thread(fn, s, max(1, min(limit, 5000)))}
+
+
+class MetaIn(BaseModel):
+    name: str | None = None
+    pinned: bool | None = None
+    archived: bool | None = None
+    notes: str | None = None
+
+
+@app.patch("/api/sessions/{sid}/meta")
+async def session_meta(sid: str, body: MetaIn):
+    return set_meta(sid, **body.model_dump(exclude_none=True))
+
+
+class ResumeIn(BaseModel):
+    fork: bool = False
+
+
+@app.post("/api/sessions/{sid}/resume")
+async def session_resume(sid: str, body: ResumeIn):
+    existing = await asyncio.to_thread(tmux.find_by_claude, sid)
+    if existing and not body.fork:
+        return {"name": existing["name"], "claude_id": sid, "already_running": True}
+    s = await asyncio.to_thread(_find, sid)
+    if not s or not s.cwd:
+        raise HTTPException(404, "No log for this session, so it can't be resumed")
+    label = (all_meta().get(sid) or {}).get("name") or s.custom_title or s.ai_title or Path(s.cwd).name
+    opts = tmux.resume_options(sid, s.agent)
+    try:
+        return await asyncio.to_thread(tmux.new_session, s.cwd, label=label[:60], resume=sid, fork=body.fork, **opts)
+    except tmux.TmuxError as e:
+        _err(e)
+
+
+# ---------- tmux ----------
+
+class NewIn(BaseModel):
+    cwd: str
+    label: str = ""
+    model: str = ""
+    permission_mode: str = ""
+    shell: bool = False
+    agent: str = "claude"
+    codex_mode: str = "ask"
+    ollama_server: str = ""     # run on this local server's model (Ollama or llama.cpp) instead of the agent's own service
+    ollama_model: str = ""
+
+
+@app.post("/api/tmux/new")
+async def tmux_new(body: NewIn):
+    if body.permission_mode and body.permission_mode not in {"default", "acceptEdits", "plan", "auto",
+                                                            "bypassPermissions", "manual"}:
+        raise HTTPException(400, "Unknown permission mode")
+    if body.agent not in ("claude", "codex"):
+        raise HTTPException(400, "Unknown agent")
+    if body.codex_mode not in tmux.CODEX_MODES:
+        raise HTTPException(400, "Unknown Codex mode")
+    if not _inside_workspace(body.cwd):
+        raise HTTPException(403, "Outside the configured workspaces (SIDUS_WORKSPACES)")
+    ollama = None
+    if body.ollama_server:
+        server = ollama_servers.get(body.ollama_server)
+        if not server:
+            raise HTTPException(400, "That model server isn't added any more")
+        if not body.ollama_model.strip():
+            raise HTTPException(400, "Pick a model on the server")
+        ollama = ollama_servers.launch_info(server, body.ollama_model.strip())
+    try:
+        return await asyncio.to_thread(tmux.new_session, body.cwd, label=body.label.strip()[:60],
+                                       model=body.model.strip(), permission_mode=body.permission_mode,
+                                       shell_only=body.shell, agent=body.agent, codex_mode=body.codex_mode,
+                                       ollama=ollama)
+    except tmux.TmuxError as e:
+        _err(e)
+
+
+def _check_name(name: str) -> None:
+    if not tmux.valid_name(name):
+        raise HTTPException(400, "Bad session name")
+
+
+@app.get("/api/tmux")
+async def tmux_list():
+    return {"sessions": await asyncio.to_thread(tmux.list_sessions)}
+
+
+@app.post("/api/tmux/{name}/kill")
+async def tmux_kill(name: str):
+    _check_name(name)
+    try:
+        await asyncio.to_thread(tmux.kill, name)
+    except tmux.TmuxError as e:
+        _err(e)
+    return {"ok": True}
+
+
+class SendIn(BaseModel):
+    text: str = ""
+    enter: bool = True
+    key: str = ""
+
+
+@app.post("/api/tmux/{name}/send")
+async def tmux_send(name: str, body: SendIn):
+    _check_name(name)
+    try:
+        if body.key:
+            await asyncio.to_thread(tmux.send_key, name, body.key)
+        else:
+            await asyncio.to_thread(tmux.send_text, name, body.text[:100_000], body.enter)
+    except tmux.TmuxError as e:
+        _err(e)
+    return {"ok": True}
+
+
+@app.get("/api/tmux/{name}/preview")
+async def tmux_preview(name: str, lines: int = 40):
+    _check_name(name)
+    return {"text": await asyncio.to_thread(tmux.capture, name, max(5, min(lines, 500)))}
+
+
+@app.post("/api/restore")
+async def restore():
+    return {"started": await asyncio.to_thread(tmux.restore, _resumable)}
+
+
+@app.post("/api/restore/dismiss")
+async def restore_dismiss():
+    tmux.dismiss_restore()
+    return {"ok": True}
+
+
+# ---------- folders (new session picker) ----------
+
+_inside_workspace = files.inside_workspace
+
+
+@app.get("/api/dirs")
+async def dirs(path: str = ""):
+    if not path:
+        return {"path": "", "parent": None, "dirs": [{"name": w, "path": w} for w in settings.workspaces]}
+    if not _inside_workspace(path):
+        raise HTTPException(403, "Outside the configured workspaces (SIDUS_WORKSPACES)")
+    try:
+        entries = sorted((e for e in os.scandir(path) if e.is_dir() and not e.name.startswith(".")),
+                         key=lambda e: e.name.lower())
+    except OSError as e:
+        _err(e)
+    real = os.path.realpath(path)
+    parent = os.path.dirname(real)
+    return {"path": real, "parent": parent if _inside_workspace(parent) else "",
+            "dirs": [{"name": e.name, "path": os.path.join(real, e.name)} for e in entries[:500]]}
+
+
+# ---------- files ----------
+
+@app.get("/api/files")
+async def files_list(path: str):
+    try:
+        return await asyncio.to_thread(files.listing, path)
+    except files.FileError as e:
+        _err(e, e.code)
+
+
+@app.get("/api/files/download")
+async def files_download(path: str, inline: bool = False):
+    try:
+        real = await asyncio.to_thread(files.download_path, path)
+    except files.FileError as e:
+        _err(e, e.code)
+    resp = FileResponse(real, filename=Path(real).name, content_disposition_type="inline" if inline else "attachment")
+    resp.headers["Content-Security-Policy"] = "sandbox"  # never run uploaded HTML/JS in Sidus's origin
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
+
+
+@app.post("/api/files/upload")
+async def files_upload(request: Request, dir: str, name: str, overwrite: bool = False):
+    """Raw request body is the file (no multipart), so large files stream straight to disk."""
+    try:
+        up = await asyncio.to_thread(files.Upload, dir, name, overwrite)
+    except files.FileError as e:
+        _err(e, e.code)
+    except OSError as e:
+        _err(e)
+    try:
+        async for chunk in request.stream():
+            if chunk:
+                await asyncio.to_thread(up.write, chunk)
+        return await asyncio.to_thread(up.finish)
+    except files.FileError as e:
+        up.abort()
+        _err(e, e.code)
+    except Exception:
+        up.abort()
+        raise
+
+
+# ---------- dashboard ----------
+
+@app.get("/api/overview")
+async def overview():
+    codex_records, codex_usage = await asyncio.gather(asyncio.to_thread(codex_index.token_records),
+                                                      asyncio.to_thread(codex_index.usage))
+    stats = await asyncio.to_thread(index.stats, 14, codex_records)
+    # Which plans are signed in decides which usage sections the sidebar and dashboard show.
+    linked = {"claude": bool(claude_credentials()), "chatgpt": bool(codex_chatgpt_auth())}
+    return {**poller.snapshot(), "stats": stats, "codex_usage": newest_codex_usage(codex_poller.usage, codex_usage),
+            "codex_usage_error": codex_poller.error, "linked": linked}
+
+
+@app.post("/api/usage/refresh")
+async def usage_refresh():
+    poller.refresh_now()
+    codex_poller.refresh_now()
+    return {"ok": True}
+
+
+# ---------- terminal ----------
+
+def _same_origin(ws: WebSocket) -> bool:
+    origin = ws.headers.get("origin")
+    if not origin:
+        return True  # non-browser client; it still needs the cookie
+    return urlparse(origin).netloc == ws.headers.get("host")
+
+
+@app.websocket("/ws/term/{name}")
+async def term(ws: WebSocket, name: str, cols: int = 120, rows: int = 32):
+    if not _authed(ws) or not _same_origin(ws) or not tmux.valid_name(name):
+        await ws.close(code=4401)
+        return
+    live = {s["name"] for s in await asyncio.to_thread(tmux.list_sessions, False)}
+    await ws.accept()
+    if name not in live:
+        await ws.send_text('{"type":"gone"}')
+        await ws.close()
+        return
+    from .terminal import bridge
+    await bridge(ws, tmux.attach_argv(name), cols, rows)
+
+
+# ---------- static ----------
+
+@app.get("/")
+async def root():
+    return FileResponse(STATIC / "index.html")
+
+
+@app.get("/manifest.webmanifest")
+async def manifest():
+    return FileResponse(STATIC / "manifest.webmanifest", media_type="application/manifest+json")
+
+
+app.mount("/static", StaticFiles(directory=STATIC), name="static")

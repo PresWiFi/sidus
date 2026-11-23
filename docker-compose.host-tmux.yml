@@ -3,9 +3,9 @@
 # The host must already have tmux running (`tmux new -d -s main`) for the socket to exist.
 #   docker compose -f docker-compose.yml -f docker-compose.host-tmux.yml up -d --build
 services:
-  hangar:
-    pid: host  # lets Hangar see the host's Claude processes for live status
+  sidus:
+    pid: host  # lets Sidus see the host's Claude processes for live status
     environment:
-      HANGAR_TMUX_SOCKET: /tmp/tmux-host/default
+      SIDUS_TMUX_SOCKET: /tmp/tmux-host/default
     volumes:
       - /tmp/tmux-${UID:-1000}:/tmp/tmux-host

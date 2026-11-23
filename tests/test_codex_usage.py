@@ -7,8 +7,8 @@ import urllib.error
 
 import pytest
 
-from hangar import codex_usage
-from hangar.config import settings
+from sidus import codex_usage
+from sidus.config import settings
 
 
 def jwt(exp):
@@ -92,7 +92,7 @@ def test_newest_prefers_recent():
 
 
 def test_overview_uses_poller(client, monkeypatch):
-    from hangar import app as app_module
+    from sidus import app as app_module
     monkeypatch.setattr(app_module.codex_poller, "usage", {"as_of": time.time(), "plan": "pro", "source": "live",
                                                            "windows": [{"key": "primary", "used_percent": 5, "window_minutes": 300, "resets_at": 1}]})
     monkeypatch.setattr(app_module.codex_poller, "error", None)
@@ -102,7 +102,7 @@ def test_overview_uses_poller(client, monkeypatch):
 
 def test_wait_wakes_when_login_file_changes(tmp_path):
     import threading
-    from hangar.usage import wait_or_login_change
+    from sidus.usage import wait_or_login_change
     f = tmp_path / "creds.json"
     f.write_text("old")
     wake = threading.Event()
@@ -117,7 +117,7 @@ def test_wait_wakes_when_login_file_changes(tmp_path):
 
 def test_wait_ignores_login_file_when_healthy(tmp_path):
     import threading
-    from hangar.usage import wait_or_login_change
+    from sidus.usage import wait_or_login_change
     f = tmp_path / "creds.json"
     f.write_text("x")
     wake = threading.Event()
@@ -138,14 +138,14 @@ def test_overview_reports_which_plans_are_linked(client, signed_in, monkeypatch,
 
 
 def test_poller_checks_soon_after_chatgpt_sign_in(tmp_path, monkeypatch):
-    """Hangar started before ChatGPT was linked: signing in must trigger a check, not wait out the interval."""
+    """Sidus started before ChatGPT was linked: signing in must trigger a check, not wait out the interval."""
     import threading
     monkeypatch.setattr(settings, "codex_home", tmp_path)
     monkeypatch.setattr(settings, "usage_poll_minutes", 60)
     monkeypatch.setattr(codex_usage, "fetch", lambda: {"as_of": time.time(), "plan": "free", "source": "live",
                                                        "windows": [{"key": "primary", "used_percent": 0, "window_minutes": 43200, "resets_at": 1}]})
     monkeypatch.setattr(codex_usage, "kv_set", lambda *a: None)
-    import hangar.usage as usage_mod
+    import sidus.usage as usage_mod
     real = usage_mod.wait_or_login_change
 
     def quick(wake, delay, login_file, failing):  # same logic, but look at the file every 0.1 s

@@ -1,4 +1,4 @@
-# Hangar: a web UI for Claude Code sessions, backed by tmux.
+# Sidus: a web UI for Claude Code sessions, backed by tmux.
 FROM python:3.12-slim-bookworm
 
 ARG UID=1000
@@ -16,8 +16,8 @@ ENV LANG=C.UTF-8 \
     PYTHONDONTWRITEBYTECODE=1 \
     DISABLE_AUTOUPDATER=1 \
     SHELL=/bin/bash \
-    HANGAR_DATA_DIR=/data \
-    HANGAR_PORT=7878
+    SIDUS_DATA_DIR=/data \
+    SIDUS_PORT=7878
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -42,34 +42,34 @@ RUN mkdir -p /tmp/ci \
  && rm -rf /tmp/ci \
  && claude --version
 
-RUN groupadd -g ${GID} hangar 2>/dev/null || true \
- && useradd -m -u ${UID} -g ${GID} -s /bin/bash hangar \
- && mkdir -p /data /etc/hangar && chown ${UID}:${GID} /data \
- && install -d -o ${UID} -g ${GID} /home/hangar/.claude /home/hangar/.codex \
- && apt-mark showmanual > /etc/hangar/base-packages.txt \
+RUN groupadd -g ${GID} sidus 2>/dev/null || true \
+ && useradd -m -u ${UID} -g ${GID} -s /bin/bash sidus \
+ && mkdir -p /data /etc/sidus && chown ${UID}:${GID} /data \
+ && install -d -o ${UID} -g ${GID} /home/sidus/.claude /home/sidus/.codex \
+ && apt-mark showmanual > /etc/sidus/base-packages.txt \
  && if [ "$ALLOW_SUDO" = "true" ]; then \
-      echo 'hangar ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/hangar && chmod 440 /etc/sudoers.d/hangar; \
+      echo 'sidus ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/sidus && chmod 440 /etc/sudoers.d/sidus; \
     fi
 
 # Claude asks before every sudo command, and knows it's in a container where it can install packages.
-COPY docker/claude-settings.json docker/container-prompt.md /etc/hangar/
-COPY docker/apt-remember /etc/apt/apt.conf.d/99hangar-remember
+COPY docker/claude-settings.json docker/container-prompt.md /etc/sidus/
+COPY docker/apt-remember /etc/apt/apt.conf.d/99sidus-remember
 RUN if [ "$ALLOW_SUDO" != "true" ]; then \
-      printf '# Running inside Hangar\n\nThis session runs in a Docker container without sudo. If a task needs a missing system tool, tell the user to add it to EXTRA_PACKAGES in .env and rebuild.\n' > /etc/hangar/container-prompt.md; \
+      printf '# Running inside Sidus\n\nThis session runs in a Docker container without sudo. If a task needs a missing system tool, tell the user to add it to EXTRA_PACKAGES in .env and rebuild.\n' > /etc/sidus/container-prompt.md; \
     fi
-ENV HANGAR_CLAUDE_BASE_ARGS="--settings /etc/hangar/claude-settings.json --append-system-prompt-file /etc/hangar/container-prompt.md"
+ENV SIDUS_CLAUDE_BASE_ARGS="--settings /etc/sidus/claude-settings.json --append-system-prompt-file /etc/sidus/container-prompt.md"
 
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY hangar ./hangar
-COPY docker/entrypoint.sh /usr/local/bin/hangar-entrypoint
+COPY sidus ./sidus
+COPY docker/entrypoint.sh /usr/local/bin/sidus-entrypoint
 # A Windows checkout can turn line endings into CRLF, which breaks the scripts. Strip any stray CRs.
-RUN sed -i 's/\r$//' /usr/local/bin/hangar-entrypoint /etc/apt/apt.conf.d/99hangar-remember \
-      /etc/hangar/container-prompt.md /app/hangar/tmux.conf \
- && chmod +x /usr/local/bin/hangar-entrypoint
+RUN sed -i 's/\r$//' /usr/local/bin/sidus-entrypoint /etc/apt/apt.conf.d/99sidus-remember \
+      /etc/sidus/container-prompt.md /app/sidus/tmux.conf \
+ && chmod +x /usr/local/bin/sidus-entrypoint
 
-USER hangar
+USER sidus
 EXPOSE 7878
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s CMD curl -fs http://127.0.0.1:7878/api/me -o /dev/null -w '%{http_code}' | grep -qE '200|401' || exit 1
-ENTRYPOINT ["/usr/bin/tini", "--", "hangar-entrypoint"]
+ENTRYPOINT ["/usr/bin/tini", "--", "sidus-entrypoint"]
