@@ -28,6 +28,7 @@ services:
       SIDUS_CLAUDE_ARGS: ${SIDUS_CLAUDE_ARGS:-${HANGAR_CLAUDE_ARGS:-}}
       SIDUS_MAX_UPLOAD_MB: ${SIDUS_MAX_UPLOAD_MB:-${HANGAR_MAX_UPLOAD_MB:-512}}
       SIDUS_PUBLIC_URL: ${SIDUS_PUBLIC_URL:-${HANGAR_PUBLIC_URL:-}}
+      SIDUS_PLUGINS: ${SIDUS_PLUGINS:-${HANGAR_PLUGINS:-}}
       TZ: ${TZ:-UTC}
     volumes:
       # Your projects, mounted at the SAME path as on the host. Claude Code files sessions by
