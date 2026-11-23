@@ -1,12 +1,12 @@
-# Hangar
+# Sidus
 
-Hangar is a self-hosted web UI for [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) and OpenAI's [Codex CLI](https://github.com/openai/codex). Every session runs in tmux, so it keeps going when you close the browser, and you can reopen it from your laptop, phone, or tablet. It works with your Claude or ChatGPT plan (no API keys) or local models through Ollama or llama.cpp.
+Sidus (formerly Hangar) is a self-hosted web UI for [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) and OpenAI's [Codex CLI](https://github.com/openai/codex). Every session runs in tmux, so it keeps going when you close the browser, and you can reopen it from your laptop, phone, or tablet. It works with your Claude or ChatGPT plan (no API keys) or local models through Ollama or llama.cpp.
 
 ![Dashboard](docs/dashboard.png)
 
 **Start here:** [Install with Docker](#docker) · [Use it from your phone](#reach-it-from-other-devices) · [How it works](docs/how-it-works.md)
 
-If Hangar is useful to you, [star the repository](https://github.com/PresWiFi/hangar) to help other developers discover it. Found a setup problem? [Open an issue](https://github.com/PresWiFi/hangar/issues/new) with your OS, install method, and the error, with credentials removed.
+If Sidus is useful to you, [star the repository](https://github.com/PresWiFi/sidus) to help other developers discover it. Found a setup problem? [Open an issue](https://github.com/PresWiFi/sidus/issues/new) with your OS, install method, and the error, with credentials removed.
 
 ## Features
 
@@ -28,10 +28,10 @@ If Hangar is useful to you, [star the repository](https://github.com/PresWiFi/ha
 ### Docker
 
 ```bash
-git clone https://github.com/PresWiFi/hangar.git && cd hangar
+git clone https://github.com/PresWiFi/sidus.git && cd sidus
 cp .env.example .env            # set WORKSPACE to your projects folder
 docker compose up -d --build
-docker compose logs hangar      # shows the one-time setup code
+docker compose logs sidus      # shows the one-time setup code
 ```
 
 Open `http://<this-machine>:7878`, enter the setup code, and create your account.
@@ -43,41 +43,57 @@ On **Windows**, run these commands in WSL (not PowerShell), with Docker Desktop'
 Run this in the Proxmox host's shell:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/PresWiFi/hangar/main/proxmox/ct/hangar.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/PresWiFi/sidus/main/proxmox/ct/sidus.sh)"
 ```
 
-It creates a Debian 13 LXC container with Hangar, Claude Code, and the GitHub CLI installed directly (no Docker). Open `http://<container-ip>:7878` and get the setup code with `journalctl -u hangar`. Run `update` in the container to upgrade. Projects go in `/root/claude`.
+It creates a Debian 13 LXC container with Sidus, Claude Code, and the GitHub CLI installed directly (no Docker). Open `http://<container-ip>:7878` and get the setup code with `journalctl -u sidus`. Run `update` in the container to upgrade. Projects go in `/root/claude`.
 
 ### Without Docker
 
 Needs Linux, macOS, or WSL, with Python 3.10+, tmux, and Claude Code (plus `gh` for GitHub and `zstd` for Codex).
 
 ```bash
-python3 -m venv ~/.local/share/hangar-venv
-~/.local/share/hangar-venv/bin/pip install -r requirements.txt
-HANGAR_WORKSPACES=~/code ~/.local/share/hangar-venv/bin/python -m hangar   # prints the setup code
+python3 -m venv ~/.local/share/sidus-venv
+~/.local/share/sidus-venv/bin/pip install -r requirements.txt
+SIDUS_WORKSPACES=~/code ~/.local/share/sidus-venv/bin/python -m sidus   # prints the setup code
 ```
 
 Sessions then run in your own tmux server, with all your tools.
 
+### Upgrading from Hangar
+
+Sidus was called Hangar until November 2026. Existing installs keep their data, sign-in, and running sessions, and `HANGAR_*` settings still work.
+
+- **Docker:** keep the volumes Hangar created, then replace the old container:
+  ```bash
+  git pull
+  echo 'COMPOSE_FILE=docker-compose.yml:docker-compose.from-hangar.yml' >> .env   # add docker-compose.tailscale.yml if you use it
+  docker compose down --remove-orphans
+  docker compose up -d --build
+  ```
+  If your clone isn't in a folder named `hangar`, also set `HANGAR_PROJECT=<folder name>` in `.env` (see `docker volume ls`).
+- **Proxmox:** run `update` in the container. It moves `/opt/hangar` to `/opt/sidus` and the `hangar` service to `sidus`.
+- **Without Docker:** the old data folder (`~/.local/share/hangar`) is used if there's no `~/.local/share/sidus`. Start it with `python -m sidus`.
+- **Ideas in Claude Code sessions started outside Sidus:** run `claude mcp remove hangar-ideas --scope user`, then connect again from Ideas.
+
 ## Connect your accounts
 
-Hangar asks after setup; you can also do it later in **Settings**.
+Sidus asks after setup; you can also do it later in **Settings**.
 
 - **Claude**: click **Sign in with Claude** and paste back the code claude.ai shows. Uses your Pro or Max plan.
-- **ChatGPT**: Hangar downloads Codex for you, then shows a device code to enter. First turn on **device code sign-in** in ChatGPT under **Settings > Security**.
+- **ChatGPT**: Sidus downloads Codex for you, then shows a device code to enter. First turn on **device code sign-in** in ChatGPT under **Settings > Security**.
 - **Local models**: Ollama and llama.cpp servers on this machine are found automatically. For another machine, pick the type and enter its address. Ollama must listen with `OLLAMA_HOST=0.0.0.0`; start `llama-server` with `--host 0.0.0.0` and at least 32k context (`-c 65536`).
 - **GitHub**: click **Sign in with GitHub** and enter the code on GitHub, or paste a token with the `repo`, `read:org`, and `workflow` scopes. Then use **New session > Clone from GitHub** to clone a repo.
 
 ## Reach it from other devices
 
 - **Home network**: `http://<machine-ip>:7878`.
-- **Tailscale**: `http://<tailscale-ip>:7878` if the machine is on your tailnet. For HTTPS and its own name (`https://hangar.<tailnet>.ts.net`), set `TS_AUTHKEY` in `.env` and run:
+- **Tailscale**: `http://<tailscale-ip>:7878` if the machine is on your tailnet. For HTTPS and its own name (`https://sidus.<tailnet>.ts.net`), set `TS_AUTHKEY` in `.env` and run:
   ```bash
   docker compose -f docker-compose.yml -f docker-compose.tailscale.yml up -d --build
   ```
 
-Don't expose port 7878 to the internet: Hangar gives whoever signs in a shell on your machine.
+Don't expose port 7878 to the internet: Sidus gives whoever signs in a shell on your machine.
 
 ## Everyday commands
 
@@ -85,9 +101,9 @@ Don't expose port 7878 to the internet: Hangar gives whoever signs in a shell on
 |---|---|
 | Stop / start | `docker compose down` / `docker compose up -d` |
 | Update Claude Code in the image | `docker compose build --no-cache && docker compose up -d` |
-| Reset the password | `docker exec -it hangar python -m hangar reset-password` |
+| Reset the password | `docker exec -it sidus python -m sidus reset-password` |
 
-Conversations are kept when Hangar stops and can be resumed later.
+Conversations are kept when Sidus stops and can be resumed later.
 
 ## Configuration
 
@@ -96,28 +112,28 @@ Set these in `.env`. The common ones:
 | Variable | Default | What it does |
 |---|---|---|
 | `WORKSPACE` | | Your projects folder. New sessions start inside it. |
-| `HANGAR_PASSWORD` | empty | Skip the setup page and create the account `admin` with this password. |
-| `CLAUDE_DIR` | Hangar's own volume | Mount your host's `~/.claude` to share its login and history. |
-| `HANGAR_BIND` | `0.0.0.0` | `127.0.0.1` keeps the port off your network (e.g. Tailscale only). |
-| `HANGAR_AUTORESTORE` | `true` | Reopen the sessions that were running when Hangar stopped. |
+| `SIDUS_PASSWORD` | empty | Skip the setup page and create the account `admin` with this password. |
+| `CLAUDE_DIR` | Sidus's own volume | Mount your host's `~/.claude` to share its login and history. |
+| `SIDUS_BIND` | `0.0.0.0` | `127.0.0.1` keeps the port off your network (e.g. Tailscale only). |
+| `SIDUS_AUTORESTORE` | `true` | Reopen the sessions that were running when Sidus stopped. |
 | `EXTRA_PACKAGES` | | Extra Debian packages to build into the image. |
 | `ALLOW_SUDO` | `true` | Let Claude install packages with sudo (it asks you first, every time). |
-| `HANGAR_PUBLIC_URL` | browser address | The address you open Hangar at, for SSO. |
-| `HANGAR_SECURE_COOKIES` | `false` | Set `true` when you only use HTTPS. |
+| `SIDUS_PUBLIC_URL` | browser address | The address you open Sidus at, for SSO. |
+| `SIDUS_SECURE_COOKIES` | `false` | Set `true` when you only use HTTPS. |
 
 The full list is in [`.env.example`](.env.example) and [docs/how-it-works.md](docs/how-it-works.md#all-settings).
 
 ## Agent skills
 
-Two skills from Hangar work in Claude Code, Codex, Cursor, and other agents without Hangar installed:
+Two skills from Sidus work in Claude Code, Codex, Cursor, and other agents without Sidus installed:
 
 - [`session-finder`](skills/session-finder/SKILL.md): search past Claude Code and Codex sessions across projects, read their transcripts, and get the command to resume or fork one. Reads local logs only.
-- [`hangar-setup`](skills/hangar-setup/SKILL.md): walks your agent through installing and configuring Hangar.
+- [`sidus-setup`](skills/sidus-setup/SKILL.md): walks your agent through installing and configuring Sidus.
 
 Install both in Claude Code:
 
 ```
-/plugin install hangar --marketplace PresWiFi/hangar
+/plugin install sidus --marketplace PresWiFi/sidus
 ```
 
 For other agents, copy a folder from [`skills/`](skills) into the agent's skills folder.
@@ -130,21 +146,21 @@ For other agents, copy a folder from [`skills/`](skills) into the agent's skills
 
 ## Development
 
-FastAPI backend in `hangar/`, plain JavaScript front end in `hangar/static/` (no build step).
+FastAPI backend in `sidus/`, plain JavaScript front end in `sidus/static/` (no build step).
 
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt
-HANGAR_PASSWORD=dev-password HANGAR_PORT=7979 python -m hangar   # sign in as admin
+SIDUS_PASSWORD=dev-password SIDUS_PORT=7979 python -m sidus   # sign in as admin
 python -m pytest -q
 ```
 
-**Releasing:** set `__version__` in `hangar/__init__.py`, merge to `main`, then `git tag vX.Y.Z && git push origin vX.Y.Z`. The Release workflow checks the version, runs the tests, and publishes the GitHub release that the Proxmox script installs from.
+**Releasing:** set `__version__` in `sidus/__init__.py`, merge to `main`, then `git tag vX.Y.Z && git push origin vX.Y.Z`. The Release workflow checks the version, runs the tests, and publishes the GitHub release that the Proxmox script installs from.
 
 ## Credits
 
 [xterm.js](https://xtermjs.org/) (MIT), [marked](https://marked.js.org/) (MIT), and [DOMPurify](https://github.com/cure53/DOMPurify) (Apache-2.0 / MPL-2.0) are vendored. The usage dashboard is adapted from UsageMeter by the same author.
 
-Hangar is an independent project, not made by or affiliated with Anthropic, OpenAI, or Ollama. Claude and Claude Code are trademarks of Anthropic; ChatGPT and Codex are trademarks of OpenAI.
+Sidus is an independent project, not made by or affiliated with Anthropic, OpenAI, or Ollama. Claude and Claude Code are trademarks of Anthropic; ChatGPT and Codex are trademarks of OpenAI.
 
 ## License
 

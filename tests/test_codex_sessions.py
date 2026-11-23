@@ -5,10 +5,10 @@ import subprocess
 
 import pytest
 
-from hangar import store, tmux
-from hangar.codex_sessions import CodexIndex, transcript
-from hangar.config import settings
-from hangar.providers import ollama
+from sidus import store, tmux
+from sidus.codex_sessions import CodexIndex, transcript
+from sidus.config import settings
+from sidus.providers import ollama
 
 SID = "01a1890a-382c-7ec1-96c9-84a5f35cde21"
 
@@ -132,7 +132,7 @@ def test_usage_none_without_limits(codex_home, tmp_path):
 
 @pytest.fixture
 def api_codex(codex_home, workspace, monkeypatch):
-    from hangar import app as app_module
+    from sidus import app as app_module
     _, day = codex_home
     write(day, rollout(str(workspace)))
     idx = CodexIndex()
@@ -160,7 +160,7 @@ def tmux_calls(monkeypatch, tmp_path):
         calls.append(list(args))
         return ""
     monkeypatch.setattr(tmux, "run", fake_run)
-    from hangar.providers import codex
+    from sidus.providers import codex
     monkeypatch.setattr(codex, "binary", lambda: "/opt/codex/bin/codex")
     store.kv_set("session_launch", {})
     store.kv_set(ollama.KEY, [{"id": "s1", "name": "GPU", "url": "http://10.0.0.5:11434"}])
@@ -181,14 +181,14 @@ def test_codex_session_ask_mode(tmux_calls, workspace):
     cmd, env, opts = started(tmux_calls)
     assert cmd.startswith("/opt/codex/bin/codex --no-daemon -s workspace-write -a on-request;")
     assert env["CODEX_HOME"] == str(settings.codex_home)
-    assert opts["@hangar_agent"] == "codex" and json.loads(opts["@hangar_launch"]) == {"codex_mode": "ask"}
+    assert opts["@sidus_agent"] == "codex" and json.loads(opts["@sidus_launch"]) == {"codex_mode": "ask"}
     assert r["claude_id"] is None  # learned later from the log the process opens
 
 
 def test_codex_label_becomes_name_once_linked(tmux_calls, workspace, monkeypatch):
     tmux.new_session(str(workspace), agent="codex", label="My task")
     _, _, opts = started(tmux_calls)
-    launch = json.loads(opts["@hangar_launch"])
+    launch = json.loads(opts["@sidus_launch"])
     assert launch["label"] == "My task"
     store.set_meta(SID, name=None)
     s = {"name": "hg-my-task", "claude_id": None, "launch": launch, "claude": None}
@@ -214,7 +214,7 @@ def test_codex_session_full_mode_on_ollama(tmux_calls, workspace):
     cmd, env, opts = started(tmux_calls)
     assert "-s danger-full-access" in cmd and "-c 'model_provider=\"ollama\"'" in cmd and "-m qwen3.5:9b" in cmd
     assert env["CODEX_OSS_BASE_URL"] == "http://10.0.0.5:11434/v1"
-    assert json.loads(opts["@hangar_launch"]) == {"codex_mode": "full", "ollama": {"server": "s1", "model": "qwen3.5:9b"}}
+    assert json.loads(opts["@sidus_launch"]) == {"codex_mode": "full", "ollama": {"server": "s1", "model": "qwen3.5:9b"}}
 
 
 def test_claude_session_on_ollama(tmux_calls, workspace):
@@ -249,7 +249,7 @@ def test_resume_without_launch_defaults(tmux_calls):
 
 
 def test_codex_needs_install(tmux_calls, workspace, monkeypatch):
-    from hangar.providers import codex
+    from sidus.providers import codex
     monkeypatch.setattr(codex, "binary", lambda: None)
     with pytest.raises(tmux.TmuxError, match="isn't installed"):
         tmux.new_session(str(workspace), agent="codex")
@@ -269,6 +269,6 @@ def test_api_new_session_checks(tmux_calls, client, workspace, tmp_path):
 
 def test_ollama_session_hides_cost(tmux_calls, client, workspace):
     r = client.post("/api/tmux/new", json={"cwd": str(workspace), "ollama_server": "s1", "ollama_model": "m"}).json()
-    from hangar import app as app_module
+    from sidus import app as app_module
     out = app_module._merge({"id": r["claude_id"], "cost": 1.23}, None, None)
     assert out["cost"] is None and out["ollama"] == "m" and out["agent"] == "claude"

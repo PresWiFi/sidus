@@ -1,4 +1,4 @@
-# How Hangar works
+# How Sidus works
 
 Details behind the [README](../README.md).
 
@@ -8,12 +8,12 @@ Details behind the [README](../README.md).
 |---|---|
 | ![Setup](setup.png) | ![Connect your AI](connect-ai.png) |
 
-Hangar has one account, and only someone who can read its log (where the setup code is printed) can create it.
+Sidus has one account, and only someone who can read its log (where the setup code is printed) can create it.
 
 **Upgrading from a version before accounts:**
 
-- Hangar creates the owner account `admin` with your `HANGAR_PASSWORD` (or the password it generated before). Sign in as `admin`, then rename the account in Settings if you like.
-- Hangar now keeps its own Claude login by default instead of using the host's `~/.claude`. To keep sharing the host's login and history, add `CLAUDE_DIR=/home/you/.claude` to `.env` (the path the old default pointed at) before you run `docker compose up -d --build`.
+- Sidus creates the owner account `admin` with your `SIDUS_PASSWORD` (or the password it generated before). Sign in as `admin`, then rename the account in Settings if you like.
+- Sidus now keeps its own Claude login by default instead of using the host's `~/.claude`. To keep sharing the host's login and history, add `CLAUDE_DIR=/home/you/.claude` to `.env` (the path the old default pointed at) before you run `docker compose up -d --build`.
 
 ## Agents and models
 
@@ -27,48 +27,48 @@ Hangar has one account, and only someone who can read its log (where the setup c
 
 Codex sessions get the same treatment as Claude's: they're listed in the sidebar (tagged *Codex*), have a transcript with tool calls, show working/waiting status, can be resumed, forked, and restored after a restart. The dashboard's token activity counts both, and a **ChatGPT usage** card shows your Codex plan limits (also in the sidebar, next to Claude's).
 
-Sessions on local models are tagged *Ollama* or *llama.cpp*. Hangar remembers which server and model a session used, so **Resume** and restore start it the same way. Claude Code's cost estimate is hidden for them, since it prices local models as if they were Claude.
+Sessions on local models are tagged *Ollama* or *llama.cpp*. Sidus remembers which server and model a session used, so **Resume** and restore start it the same way. Claude Code's cost estimate is hidden for them, since it prices local models as if they were Claude.
 
 ## Connecting AI in detail
 
-**Claude.** **Sign in with Claude** uses your Pro or Max subscription, like `claude /login`. The login is stored in Hangar's Claude folder (`CLAUDE_DIR`).
+**Claude.** **Sign in with Claude** uses your Pro or Max subscription, like `claude /login`. The login is stored in Sidus's Claude folder (`CLAUDE_DIR`).
 
-**ChatGPT (Codex).** Hangar runs OpenAI's [Codex CLI](https://github.com/openai/codex) for ChatGPT. It isn't in the image: the first time you pick ChatGPT, Hangar downloads a pinned Codex release from GitHub (about 163 MB), checks its SHA-256, and installs it in Hangar's data volume, so it survives rebuilds. Then you sign in with a device code:
+**ChatGPT (Codex).** Sidus runs OpenAI's [Codex CLI](https://github.com/openai/codex) for ChatGPT. It isn't in the image: the first time you pick ChatGPT, Sidus downloads a pinned Codex release from GitHub (about 163 MB), checks its SHA-256, and installs it in Sidus's data volume, so it survives rebuilds. Then you sign in with a device code:
 
 1. In ChatGPT, open **Settings > Security** and turn on **device code sign-in** for Codex. You only do this once.
-2. Open the link Hangar shows and enter the code.
+2. Open the link Sidus shows and enter the code.
 
-If you can't use device codes, choose **Use browser sign-in instead**. After you sign in, your browser lands on a `localhost:1455` page that doesn't load. That's expected: copy that page's address and paste it into Hangar, which finishes the sign-in. The login is stored in `CODEX_HOME` (`~/.codex` in the container's home volume).
+If you can't use device codes, choose **Use browser sign-in instead**. After you sign in, your browser lands on a `localhost:1455` page that doesn't load. That's expected: copy that page's address and paste it into Sidus, which finishes the sign-in. The login is stored in `CODEX_HOME` (`~/.codex` in the container's home volume).
 
 Codex's own command sandbox can't work inside Docker (it needs user namespaces). So when you start a Codex session you pick how it runs commands:
 
 - **Ask before commands** (default): Codex keeps its sandbox. Each command fails there first, then Codex asks whether to run it for real. Safe, but a little slow, and small local models can retry a few times before asking.
 - **Full access**: no sandbox and no questions. The container is the only boundary.
 
-**Ollama.** Hangar finds Ollama on this machine or the Docker host by itself (`host.docker.internal:11434`); click **Add**. For another machine, enter its address, for example `192.168.1.20` or `http://gpu-box:11434`. That machine's Ollama must listen on the network (`OLLAMA_HOST=0.0.0.0`). Claude Code uses Ollama through its Anthropic-compatible API (Ollama 0.14 or later).
+**Ollama.** Sidus finds Ollama on this machine or the Docker host by itself (`host.docker.internal:11434`); click **Add**. For another machine, enter its address, for example `192.168.1.20` or `http://gpu-box:11434`. That machine's Ollama must listen on the network (`OLLAMA_HOST=0.0.0.0`). Claude Code uses Ollama through its Anthropic-compatible API (Ollama 0.14 or later).
 
-**llama.cpp.** Add a `llama-server` (llama.cpp's HTTP server) under **Local models** with the type **llama.cpp**. Hangar finds one on this machine or the Docker host at ports 9931 (llama-server's default) and 8080. For another machine, start it with `--host 0.0.0.0`. If it uses `--api-key`, enter the key; Hangar stores it in its database and never shows it again. Router mode (`llama serve` with several models) works: each model shows up in the model list.
+**llama.cpp.** Add a `llama-server` (llama.cpp's HTTP server) under **Local models** with the type **llama.cpp**. Sidus finds one on this machine or the Docker host at ports 9931 (llama-server's default) and 8080. For another machine, start it with `--host 0.0.0.0`. If it uses `--api-key`, enter the key; Sidus stores it in its database and never shows it again. Router mode (`llama serve` with several models) works: each model shows up in the model list.
 
-- **Claude Code** uses llama-server's Anthropic-compatible API (`/v1/messages`). Hangar also points Claude Code's background requests at the same model and tells it the model's real context size (`CLAUDE_CODE_MAX_CONTEXT_TOKENS`, read from `/props`), so it compacts the conversation in time. Claude Code's system prompt and tools need a lot of context: give the server at least 32k (`-c 65536` or more). Hangar warns when it's smaller.
+- **Claude Code** uses llama-server's Anthropic-compatible API (`/v1/messages`). Sidus also points Claude Code's background requests at the same model and tells it the model's real context size (`CLAUDE_CODE_MAX_CONTEXT_TOKENS`, read from `/props`), so it compacts the conversation in time. Claude Code's system prompt and tools need a lot of context: give the server at least 32k (`-c 65536` or more). Sidus warns when it's smaller.
 - **Codex** uses llama-server's Responses API (`/v1/responses`) as a custom model provider.
 
 ## GitHub in detail
 
-Hangar runs the [GitHub CLI](https://cli.github.com/) (`gh auth login`, then `gh auth setup-git`), so git asks `gh` for a token whenever it talks to github.com. Clone, pull, and push work over HTTPS in every session, and Claude can use `gh` for pull requests and issues. If your git name and email aren't set yet, Hangar fills them in from your GitHub account (with GitHub's private noreply address when your email isn't public). The login lives in `~/.config/gh` in the container's home volume, so it survives rebuilds.
+Sidus runs the [GitHub CLI](https://cli.github.com/) (`gh auth login`, then `gh auth setup-git`), so git asks `gh` for a token whenever it talks to github.com. Clone, pull, and push work over HTTPS in every session, and Claude can use `gh` for pull requests and issues. If your git name and email aren't set yet, Sidus fills them in from your GitHub account (with GitHub's private noreply address when your email isn't public). The login lives in `~/.config/gh` in the container's home volume, so it survives rebuilds.
 
 If you can't use the device code, choose **Use a token instead** and paste a classic personal access token with the `repo`, `read:org`, and `workflow` scopes. **Unlink** signs `gh` out and removes the git setting.
 
-To start on a repo, open **New session**, pick the parent folder, open **Clone from GitHub**, and pick a repo (or type `owner/name`). Hangar clones it into that folder and selects it for the session.
+To start on a repo, open **New session**, pick the parent folder, open **Clone from GitHub**, and pick a repo (or type `owner/name`). Sidus clones it into that folder and selects it for the session.
 
 ## How sessions work
 
-- **New session** opens a folder picker (limited to `WORKSPACE`). For Claude it starts `claude --session-id <uuid>` inside a new tmux session, and Hangar uses that ID to link the terminal to the conversation log.
-- **Copying from the terminal:** drag over text and it's copied to the device you're on (tmux selects it and Hangar passes it to your clipboard). To use the browser's own selection instead, hold Shift while dragging, then press Ctrl+Shift+C (Cmd+C on a Mac). Programs that copy through the terminal, like Claude Code's `/copy`, work too. Hangar never lets the remote side read your clipboard.
+- **New session** opens a folder picker (limited to `WORKSPACE`). For Claude it starts `claude --session-id <uuid>` inside a new tmux session, and Sidus uses that ID to link the terminal to the conversation log.
+- **Copying from the terminal:** drag over text and it's copied to the device you're on (tmux selects it and Sidus passes it to your clipboard). To use the browser's own selection instead, hold Shift while dragging, then press Ctrl+Shift+C (Cmd+C on a Mac). Programs that copy through the terminal, like Claude Code's `/copy`, work too. Sidus never lets the remote side read your clipboard.
 - When the agent exits, the tmux session drops to a shell in the same folder, so nothing disappears unexpectedly. **Stop** closes the tmux session.
-- Claude Code stores conversations in `~/.claude/projects/<folder-path>/<id>.jsonl`. Hangar reads those files incrementally and never changes them.
-- Codex runs with `--no-daemon`, so each tmux session owns its Codex process. Codex can't be given an ID up front, so Hangar links the terminal to the conversation once the Codex process opens its log in `~/.codex/sessions/`. Codex compresses logs older than a week; Hangar reads those too (with `zstd`, which is in the image).
+- Claude Code stores conversations in `~/.claude/projects/<folder-path>/<id>.jsonl`. Sidus reads those files incrementally and never changes them.
+- Codex runs with `--no-daemon`, so each tmux session owns its Codex process. Codex can't be given an ID up front, so Sidus links the terminal to the conversation once the Codex process opens its log in `~/.codex/sessions/`. Codex compresses logs older than a week; Sidus reads those too (with `zstd`, which is in the image).
 - The workspace is mounted at **the same path** inside the container. That's why `claude --resume` works for sessions started on the host, and the other way around.
-- tmux runs inside the container. Stopping the container ends the tmux sessions but not the conversations. With `HANGAR_AUTORESTORE=true`, they're resumed automatically on the next start. Without it, the sidebar shows a **Restore** button.
+- tmux runs inside the container. Stopping the container ends the tmux sessions but not the conversations. With `SIDUS_AUTORESTORE=true`, they're resumed automatically on the next start. Without it, the sidebar shows a **Restore** button.
 
 ## Scheduled tasks
 
@@ -76,63 +76,65 @@ To start on a repo, open **New session**, pick the parent folder, open **Clone f
 
 Each task has its own session, in the sidebar tagged *Scheduled*, and keeps one conversation going:
 
-- If the session is running and the agent is waiting, Hangar types the prompt into it.
+- If the session is running and the agent is waiting, Sidus types the prompt into it.
 - If the agent is still working on the previous run, that run is **skipped** and logged.
-- If the session was stopped, or the agent exited to a shell, Hangar starts it again, resuming the task's conversation with the prompt as the first message.
-- Runs that were due while Hangar was off are logged as missed, not run late. A one-time task still runs late, then turns itself off.
+- If the session was stopped, or the agent exited to a shell, Sidus starts it again, resuming the task's conversation with the prompt as the first message.
+- Runs that were due while Sidus was off are logged as missed, not run late. A one-time task still runs late, then turns itself off.
 
-Tasks run unattended: Claude Code in bypass-permissions mode (Hangar also skips its confirmation screen for these sessions), Codex with full access. Each task card shows the last runs, the session's state, and **Run now**. Changing a task's folder or agent starts a new conversation on the next run; deleting a task leaves its session and conversation in place.
+Tasks run unattended: Claude Code in bypass-permissions mode (Sidus also skips its confirmation screen for these sessions), Codex with full access. Each task card shows the last runs, the session's state, and **Run now**. Changing a task's folder or agent starts a new conversation on the next run; deleting a task leaves its session and conversation in place.
 
 ## Tools inside the container
 
 Claude runs inside the container, so its commands use what's installed there. The image starts with git, curl, ripgrep, jq, Python 3.12, and a few basics. There are three ways to get more:
 
-- **Let Claude install it.** Claude can run `sudo apt-get install`. Every sudo command shows a permission prompt, even in auto mode, so nothing gets installed without your OK. Hangar passes Claude a short note saying it's in a Debian container and can do this.
-- **Packages are kept.** Hangar records what's been installed with apt in `/data/apt-packages.txt` and reinstalls it in the background when the container is recreated (log: `/data/apt-restore.log`). User-level installs (`pip install --user`, `~/.local`, `~/.cargo`, `~/.nvm`) live in the home volume and are kept too. Anything else written to system folders, like `npm install -g`, is lost on recreate.
+- **Let Claude install it.** Claude can run `sudo apt-get install`. Every sudo command shows a permission prompt, even in auto mode, so nothing gets installed without your OK. Sidus passes Claude a short note saying it's in a Debian container and can do this.
+- **Packages are kept.** Sidus records what's been installed with apt in `/data/apt-packages.txt` and reinstalls it in the background when the container is recreated (log: `/data/apt-restore.log`). User-level installs (`pip install --user`, `~/.local`, `~/.cargo`, `~/.nvm`) live in the home volume and are kept too. Anything else written to system folders, like `npm install -g`, is lost on recreate.
 - **Bake it into the image.** Set `EXTRA_PACKAGES` in `.env`, for example `EXTRA_PACKAGES="build-essential golang nodejs npm"`, and rebuild.
 
 To turn off sudo entirely, set `ALLOW_SUDO=false` in `.env` and rebuild. The sudo prompt is a Claude Code permission rule (`ask: Bash(sudo:*)`), so it doesn't apply in `bypassPermissions` mode.
 
-If you need the host's full toolchain instead, run Hangar [without Docker](../README.md#without-docker). On native Linux, you can also try `docker-compose.host-tmux.yml`, which runs sessions in the host's tmux server.
+If you need the host's full toolchain instead, run Sidus [without Docker](../README.md#without-docker). On native Linux, you can also try `docker-compose.host-tmux.yml`, which runs sessions in the host's tmux server.
 
 ## Reaching it over Tailscale
 
-Turn on HTTPS certificates for your tailnet first (admin console > DNS). With the sidecar, also set `HANGAR_SECURE_COOKIES=true` if you only use HTTPS, and `HANGAR_BIND=127.0.0.1` so the plain port isn't open on your network.
+Turn on HTTPS certificates for your tailnet first (admin console > DNS). With the sidecar, also set `SIDUS_SECURE_COOKIES=true` if you only use HTTPS, and `SIDUS_BIND=127.0.0.1` so the plain port isn't open on your network.
 
 ## All settings
 
+Each `SIDUS_*` variable can also be given under its old name, `HANGAR_*`. The `SIDUS_` one wins if both are set.
+
 | Variable | Default | What it does |
 |---|---|---|
-| `WORKSPACE` (Docker) | | Projects folder, mounted at the same path inside the container. Sets `HANGAR_WORKSPACES`. |
-| `HANGAR_BIND` (Docker) | `0.0.0.0` | Address the port is published on. |
+| `WORKSPACE` (Docker) | | Projects folder, mounted at the same path inside the container. Sets `SIDUS_WORKSPACES`. |
+| `SIDUS_BIND` (Docker) | `0.0.0.0` | Address the port is published on. |
 | `EXTRA_PACKAGES` (build) | | Extra Debian packages baked into the image. |
-| `HANGAR_PASSWORD` | empty | Optional. Skips the setup page and creates the owner account `admin` with this password. If you change it later, Hangar updates the password on its next start. Leave empty to use the setup page. |
-| `HANGAR_WORKSPACES` | home folder | Comma-separated folders that new sessions can start in. |
-| `HANGAR_PORT` / `HANGAR_HOST` | `7878` / `0.0.0.0` | Where the server listens. |
-| `HANGAR_DATA_DIR` | `~/.local/share/hangar` (`/data` in Docker) | Hangar's database (including the owner account) and cookie secret. |
-| `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code's folder. In Docker, set `CLAUDE_DIR` in `.env` instead to choose what's mounted there (default: Hangar's own `hangar-claude` volume). |
+| `SIDUS_PASSWORD` | empty | Optional. Skips the setup page and creates the owner account `admin` with this password. If you change it later, Sidus updates the password on its next start. Leave empty to use the setup page. |
+| `SIDUS_WORKSPACES` | home folder | Comma-separated folders that new sessions can start in. |
+| `SIDUS_PORT` / `SIDUS_HOST` | `7878` / `0.0.0.0` | Where the server listens. |
+| `SIDUS_DATA_DIR` | `~/.local/share/sidus` (`/data` in Docker) | Sidus's database (including the owner account) and cookie secret. |
+| `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code's folder. In Docker, set `CLAUDE_DIR` in `.env` instead to choose what's mounted there (default: Sidus's own `sidus-claude` volume). |
 | `CODEX_HOME` | `~/.codex` | Codex CLI's folder (login, config, session logs). |
-| `HANGAR_CODEX_DOWNLOAD_BASE` | GitHub releases | Mirror or local folder (`file:///...`) to install Codex from. The SHA-256 check still applies. |
-| `HANGAR_AUTORESTORE` | `false` (`true` in compose) | Resume the sessions that were running when Hangar last stopped. |
-| `HANGAR_CLAUDE_ARGS` | | Extra arguments for every new or resumed session. |
+| `SIDUS_CODEX_DOWNLOAD_BASE` | GitHub releases | Mirror or local folder (`file:///...`) to install Codex from. The SHA-256 check still applies. |
+| `SIDUS_AUTORESTORE` | `false` (`true` in compose) | Resume the sessions that were running when Sidus last stopped. |
+| `SIDUS_CLAUDE_ARGS` | | Extra arguments for every new or resumed session. |
 | `ALLOW_SUDO` (build) | `true` | Docker only: give Claude sudo, with a permission prompt for each sudo command. |
-| `HANGAR_CLAUDE_CMD` | `claude` | Path to the Claude Code binary. |
-| `HANGAR_GH_CMD` | `gh` | Path to the GitHub CLI, used to link GitHub and clone repos. |
-| `HANGAR_TMUX_SOCKET` | tmux default | Use a specific tmux server socket. |
-| `HANGAR_USAGE_POLL_MINUTES` | `5` | How often to check plan usage (minimum 1; the endpoint rate-limits). |
-| `HANGAR_MAX_UPLOAD_MB` | `512` | Largest file you can upload from the browser. |
-| `HANGAR_SECURE_COOKIES` | `false` | Mark the login cookie HTTPS-only. |
-| `HANGAR_PUBLIC_URL` | browser address | The address people open Hangar at, used for the SSO redirect URI. |
-| `HANGAR_HOSTNAME` | system hostname | Name shown in the UI. |
+| `SIDUS_CLAUDE_CMD` | `claude` | Path to the Claude Code binary. |
+| `SIDUS_GH_CMD` | `gh` | Path to the GitHub CLI, used to link GitHub and clone repos. |
+| `SIDUS_TMUX_SOCKET` | tmux default | Use a specific tmux server socket. |
+| `SIDUS_USAGE_POLL_MINUTES` | `5` | How often to check plan usage (minimum 1; the endpoint rate-limits). |
+| `SIDUS_MAX_UPLOAD_MB` | `512` | Largest file you can upload from the browser. |
+| `SIDUS_SECURE_COOKIES` | `false` | Mark the login cookie HTTPS-only. |
+| `SIDUS_PUBLIC_URL` | browser address | The address people open Sidus at, used for the SSO redirect URI. |
+| `SIDUS_HOSTNAME` | system hostname | Name shown in the UI. |
 
 ## Limits
 
-- The usage numbers come from the same unofficial endpoint Claude Code's `/usage` uses. It rate-limits fast polling, so Hangar checks every 5 minutes and backs off on errors. It only works with a Claude subscription login, not an API key.
+- The usage numbers come from the same unofficial endpoint Claude Code's `/usage` uses. It rate-limits fast polling, so Sidus checks every 5 minutes and backs off on errors. It only works with a Claude subscription login, not an API key.
 - The "cost" on a session is Claude Code's API-equivalent estimate, not what a subscription charges.
-- Live status (working, waiting) comes from the files Claude Code writes in `~/.claude/sessions`, matched to processes Hangar can see. For Codex it comes from the turn events in its log.
-- ChatGPT usage is checked every 5 minutes with the same request Codex's `/status` makes, using the token Codex saved. Hangar never refreshes that token; if it has expired, the card shows the limits from Codex's last reply until you use Codex again. The endpoint is unofficial, like Claude's.
+- Live status (working, waiting) comes from the files Claude Code writes in `~/.claude/sessions`, matched to processes Sidus can see. For Codex it comes from the turn events in its log.
+- ChatGPT usage is checked every 5 minutes with the same request Codex's `/status` makes, using the token Codex saved. Sidus never refreshes that token; if it has expired, the card shows the limits from Codex's last reply until you use Codex again. The endpoint is unofficial, like Claude's.
 - Local models through Ollama or llama.cpp are much weaker agents than Claude or GPT, and Claude Code features Ollama doesn't support (prompt caching, token counting) are skipped. The first message to a model that isn't loaded can take a minute.
 
 ## Code layout
 
-The backend is FastAPI (`hangar/app.py`), with modules for tmux (`tmux.py`), Claude and Codex session logs (`sessions.py`, `codex_sessions.py`), usage (`usage.py`), the terminal bridge (`terminal.py`), the owner account (`auth.py`), SSO (`oidc.py`), and linking Claude, ChatGPT, and Ollama (`providers/`). The front end is plain JavaScript with no build step (`hangar/static/`). xterm.js, marked, and DOMPurify are vendored in `hangar/static/vendor`, so the UI works offline.
+The backend is FastAPI (`sidus/app.py`), with modules for tmux (`tmux.py`), Claude and Codex session logs (`sessions.py`, `codex_sessions.py`), usage (`usage.py`), the terminal bridge (`terminal.py`), the owner account (`auth.py`), SSO (`oidc.py`), and linking Claude, ChatGPT, and Ollama (`providers/`). The front end is plain JavaScript with no build step (`sidus/static/`). xterm.js, marked, and DOMPurify are vendored in `sidus/static/vendor`, so the UI works offline.

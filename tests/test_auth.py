@@ -1,15 +1,15 @@
-"""Owner account: setup, sign-in, account changes, migration from HANGAR_PASSWORD, reset-password."""
+"""Owner account: setup, sign-in, account changes, migration from SIDUS_PASSWORD, reset-password."""
 import subprocess
 import sys
 
 import pytest
 from fastapi.testclient import TestClient
 
-from hangar import auth, store
-from hangar.app import app
-from hangar.config import settings
+from sidus import auth, store
+from sidus.app import app
+from sidus.config import settings
 
-PW = "test-password"  # HANGAR_PASSWORD from conftest, migrated to owner "admin"
+PW = "test-password"  # SIDUS_PASSWORD from conftest, migrated to owner "admin"
 
 
 @pytest.fixture(autouse=True)
@@ -30,7 +30,7 @@ def fresh():
     """A brand-new install: no owner, a setup code."""
     store.kv_set("owner", None)
     auth.new_setup_code()
-    return TestClient(app, headers={"X-Hangar": "1"})
+    return TestClient(app, headers={"X-Sidus": "1"})
 
 
 def signed_in(c: TestClient) -> bool:
@@ -82,7 +82,7 @@ def test_setup_validates(fresh, username, password):
 def test_setup_only_once(fresh):
     code = auth.setup_code
     assert fresh.post("/api/setup", json={"code": code, "username": "one", "password": "a-long-password"}).status_code == 200
-    other = TestClient(app, headers={"X-Hangar": "1"})
+    other = TestClient(app, headers={"X-Sidus": "1"})
     r = other.post("/api/setup", json={"code": code, "username": "two", "password": "a-long-password"})
     assert r.status_code == 409
     assert auth.owner()["username"] == "one"
@@ -122,7 +122,7 @@ def test_old_password_only_login_is_rejected(anon):
 # ---------- account ----------
 
 def test_change_password_signs_out_other_devices(client):
-    other = TestClient(app, headers={"X-Hangar": "1"})
+    other = TestClient(app, headers={"X-Sidus": "1"})
     other.cookies.set(auth.COOKIE, auth.make_token())
     assert signed_in(other)
     r = client.post("/api/account/password", json={"current": PW, "new": "brand-new-password"})
@@ -149,7 +149,7 @@ def test_change_username(client, anon):
 
 
 def test_sign_out_everywhere(client):
-    other = TestClient(app, headers={"X-Hangar": "1"})
+    other = TestClient(app, headers={"X-Sidus": "1"})
     other.cookies.set(auth.COOKIE, auth.make_token())
     assert client.post("/api/account/signout-all").status_code == 200
     assert signed_in(client)
@@ -187,7 +187,7 @@ def test_editing_env_password_updates_owner():
 
 def test_unchanged_env_password_keeps_ui_password(client):
     client.post("/api/account/password", json={"current": PW, "new": "changed-in-the-ui"})
-    auth.migrate()  # restart with the same HANGAR_PASSWORD
+    auth.migrate()  # restart with the same SIDUS_PASSWORD
     assert auth.check_login("admin", "changed-in-the-ui")
 
 
@@ -212,10 +212,10 @@ def test_no_password_anywhere_means_setup():
 # ---------- reset-password command ----------
 
 def test_reset_password_command():
-    env = {"HANGAR_DATA_DIR": str(settings.data_dir), "HANGAR_PASSWORD": settings.password,
-           "HANGAR_WORKSPACES": settings.workspaces[0], "CLAUDE_CONFIG_DIR": str(settings.claude_dir),
+    env = {"SIDUS_DATA_DIR": str(settings.data_dir), "SIDUS_PASSWORD": settings.password,
+           "SIDUS_WORKSPACES": settings.workspaces[0], "CLAUDE_CONFIG_DIR": str(settings.claude_dir),
            "PATH": "/usr/bin:/bin"}
-    out = subprocess.run([sys.executable, "-m", "hangar", "reset-password", "--username", "owner2"],
+    out = subprocess.run([sys.executable, "-m", "sidus", "reset-password", "--username", "owner2"],
                          capture_output=True, text=True, env=env, check=True).stdout
     password = out.split("Password: ")[1].split()[0]
     assert auth.check_login("owner2", password)

@@ -8,9 +8,9 @@ import textwrap
 
 import pytest
 
-from hangar import store
-from hangar.config import settings
-from hangar.providers import claude, codex, ollama
+from sidus import store
+from sidus.config import settings
+from sidus.providers import claude, codex, ollama
 
 
 def script(path, body):
@@ -99,7 +99,7 @@ def test_claude_success_but_no_login_found(claude_says_ok, client):
     client.post("/api/providers/claude/login")
     r = client.post("/api/providers/claude/code", json={"code": "GOOD"})
     assert r.status_code == 409
-    assert "says the sign-in worked, but Hangar can't find the login in" in r.json()["detail"]
+    assert "says the sign-in worked, but Sidus can't find the login in" in r.json()["detail"]
     assert str(claude_says_ok) in r.json()["detail"]
 
 

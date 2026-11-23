@@ -1,5 +1,5 @@
 #!/bin/bash
-# Prepares the container user's home (a volume, so it survives restarts) and starts Hangar.
+# Prepares the container user's home (a volume, so it survives restarts) and starts Sidus.
 set -e
 mkdir -p "$HOME/.claude" "$HOME/.codex"
 
@@ -46,7 +46,7 @@ if not current.get("hasCompletedOnboarding") or not current.get("projects"):
 # Trust the workspace folders the owner configured (this covers their subfolders too). Otherwise a fresh
 # login asks "Do you trust this folder?" on the first session, and its default answer exits Claude.
 projects = current.setdefault("projects", {})
-for ws in os.environ.get("HANGAR_WORKSPACES", "").replace(";", ",").split(","):
+for ws in (os.environ.get("SIDUS_WORKSPACES") or os.environ.get("HANGAR_WORKSPACES", "")).replace(";", ",").split(","):
     ws = ws.strip().rstrip("/")
     if ws:
         projects.setdefault(ws, {})["hasTrustDialogAccepted"] = True
@@ -61,17 +61,17 @@ if ! git config --global --get-all safe.directory 2>/dev/null | grep -qx '\*'; t
 fi
 
 # A friendlier shell for sessions that drop back to bash.
-if [ ! -f "$HOME/.bashrc" ] || ! grep -q hangar-prompt "$HOME/.bashrc"; then
+if [ ! -f "$HOME/.bashrc" ] || ! grep -q sidus-prompt "$HOME/.bashrc"; then
   cat >> "$HOME/.bashrc" <<'RC'
-# hangar-prompt
-PS1='\[\e[2m\]hangar\[\e[0m\] \[\e[36m\]\w\[\e[0m\] \$ '
+# sidus-prompt
+PS1='\[\e[2m\]sidus\[\e[0m\] \[\e[36m\]\w\[\e[0m\] \$ '
 alias ll='ls -lah'
 RC
 fi
 
 # Reinstall packages Claude (or you) added with apt before the container was recreated.
 if [ -s /data/apt-packages.txt ] && sudo -n true 2>/dev/null; then
-  missing=$(comm -13 <(sort -u /etc/hangar/base-packages.txt) <(sort -u /data/apt-packages.txt) | while read -r p; do
+  missing=$(comm -13 <(sort -u /etc/sidus/base-packages.txt) <(sort -u /data/apt-packages.txt) | while read -r p; do
     dpkg -s "$p" >/dev/null 2>&1 || echo "$p"; done | xargs)
   if [ -n "$missing" ]; then
     echo "Reinstalling packages in the background: $missing (log: /data/apt-restore.log)"
@@ -79,4 +79,4 @@ if [ -s /data/apt-packages.txt ] && sudo -n true 2>/dev/null; then
   fi
 fi
 
-exec python -m hangar "$@"
+exec python -m sidus "$@"

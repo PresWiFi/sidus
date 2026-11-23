@@ -37,4 +37,4 @@ Search covers session titles, folder paths, git branches, and the prompts the pe
 - Session titles come from the agent's own auto-generated or `/rename` titles, or else the first prompt.
 - Logs can contain secrets the person pasted. Quote from them only as much as the question needs.
 
-Part of [Hangar](https://github.com/PresWiFi/hangar), a self-hosted web UI that keeps Claude Code and Codex sessions running in tmux so you can pick them up from any device.
+Part of [Sidus](https://github.com/PresWiFi/sidus), a self-hosted web UI that keeps Claude Code and Codex sessions running in tmux so you can pick them up from any device.

@@ -1,12 +1,12 @@
-# Optional: give Hangar its own Tailscale device with HTTPS, e.g. https://hangar.your-tailnet.ts.net
+# Optional: give Sidus its own Tailscale device with HTTPS, e.g. https://sidus.your-tailnet.ts.net
 #   1. Make an auth key at https://login.tailscale.com/admin/settings/keys and set TS_AUTHKEY in .env
 #   2. Enable HTTPS certificates for your tailnet (admin console > DNS > HTTPS Certificates)
 #   3. docker compose -f docker-compose.yml -f docker-compose.tailscale.yml up -d --build
 services:
   tailscale:
     image: tailscale/tailscale:stable
-    container_name: hangar-tailscale
-    hostname: ${TS_HOSTNAME:-hangar}
+    container_name: sidus-tailscale
+    hostname: ${TS_HOSTNAME:-sidus}
     restart: unless-stopped
     environment:
       TS_AUTHKEY: ${TS_AUTHKEY:?Set TS_AUTHKEY in .env}
@@ -17,9 +17,9 @@ services:
       - tailscale-state:/var/lib/tailscale
       - ./tailscale/serve.json:/config/serve.json:ro
 
-  hangar:
+  sidus:
     environment:
-      HANGAR_SECURE_COOKIES: ${HANGAR_SECURE_COOKIES:-false}
+      SIDUS_SECURE_COOKIES: ${SIDUS_SECURE_COOKIES:-${HANGAR_SECURE_COOKIES:-false}}
 
 volumes:
   tailscale-state:

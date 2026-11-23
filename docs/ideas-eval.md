@@ -6,19 +6,19 @@ Code runs, not mocks.
 
 ## Method
 
-- **Harness:** [`tests/eval/ideas_eval.py`](../tests/eval/ideas_eval.py). It starts a throwaway Hangar with
-  `HANGAR_PLUGINS=ideas` on a local port, with its own data folder. Then it runs `claude -p` with the same
-  arguments Hangar adds to its sessions:
+- **Harness:** [`tests/eval/ideas_eval.py`](../tests/eval/ideas_eval.py). It starts a throwaway Sidus with
+  `SIDUS_PLUGINS=ideas` on a local port, with its own data folder. Then it runs `claude -p` with the same
+  arguments Sidus adds to its sessions:
   ```
-  --mcp-config '<inline JSON>' --allowedTools mcp__hangar-ideas__* --session-id <new uuid>
+  --mcp-config '<inline JSON>' --allowedTools mcp__sidus-ideas__* --session-id <new uuid>
   ```
   The Docker image's base arguments (its settings file and container note) were included, as in a real container
   session.
-- **Checks:** done against Hangar's API after each run. Projects are attributed to a run by the session ID that
+- **Checks:** done against Sidus's API after each run. Projects are attributed to a run by the session ID that
   created them, which the MCP server sends automatically.
 - **Setup:** Claude Code 2.1.308 with its default model, `mcp` 2.3.0. Five runs in parallel, each in a fresh
   session (no `CLAUDE.md`, no earlier context).
-- **Not edited between runs:** the standing instruction (MCP server instructions in `hangar/ideas/mcp.py`) and the
+- **Not edited between runs:** the standing instruction (MCP server instructions in `sidus/ideas/mcp.py`) and the
   tool descriptions were written once and left alone during the eval.
 
 Re-run it with:
@@ -27,7 +27,7 @@ Re-run it with:
 python tests/eval/ideas_eval.py fresh new repeat routine milestone discard down badtoken
 ```
 
-The eval ran with the config in a file. Hangar now passes the same JSON inline (see "Notes" below), and the
+The eval ran with the config in a file. Sidus now passes the same JSON inline (see "Notes" below), and the
 harness does too.
 
 ## Results (2026-10-27)
@@ -39,7 +39,7 @@ harness does too.
 | Routine question, bug fix, or idle brainstorming | **10/10** | Nothing filed and no existing project touched |
 | Work matching a milestone (opening prompt from **Work on next milestone**) | **10/10** | That milestone is `done`, and the last one isn't |
 | "Discard" (resuming the session that filed it) | **10/10** | Project is `killed` |
-| Hangar stopped | **3/3** | Finishes quickly (12-15 s), tells the user the tracker is unavailable, nothing hangs |
+| Sidus stopped | **3/3** | Finishes quickly (12-15 s), tells the user the tracker is unavailable, nothing hangs |
 | Wrong token | **1/1** | Finishes quickly (14 s), tells the user the token was refused, nothing filed |
 
 The whole run took about 15 minutes. At API prices it would cost about $7.
@@ -133,13 +133,13 @@ Each new-idea session was resumed with: *"Actually, discard that idea. I don't h
 projects moved to `killed`, with the reason saved as a note (for example *"User doesn't have time for it."*).
 
 ### Failure cases
-- **Hangar stopped:** *"I have decided to build a habit tracker app with streaks and weekly reports that syncs
-  between my phone and laptop."* Claude replied *"I couldn't file this in your Ideas tracker because Hangar isn't
+- **Sidus stopped:** *"I have decided to build a habit tracker app with streaks and weekly reports that syncs
+  between my phone and laptop."* Claude replied *"I couldn't file this in your Ideas tracker because Sidus isn't
   reachable right now ... Once it's back up, ask me and I'll add the project"*, then helped with the idea.
   An earlier wording ("a small tool that reminds me to stretch every hour") finished in 30 s, but Claude judged
   it too small to file, so the error path wasn't exercised. That's why the prompt above is bigger.
-- **Wrong token:** *"I couldn't file this in your project tracker. Hangar rejected the Ideas token, possibly
-  because it was reset. Check the Ideas connection settings in Hangar."*
+- **Wrong token:** *"I couldn't file this in your project tracker. Sidus rejected the Ideas token, possibly
+  because it was reset. Check the Ideas connection settings in Sidus."*
 
 The MCP server's unit tests cover the same failures directly: unreachable, a server that accepts the connection
 and never answers (times out), wrong token, missing token, proxy settings ignored. See
@@ -147,14 +147,14 @@ and never answers (times out), wrong token, missing token, proxy settings ignore
 
 ## Notes
 
-- **Config passed inline after the eval:** after the runs, Hangar was changed to pass the MCP config as inline JSON
+- **Config passed inline after the eval:** after the runs, Sidus was changed to pass the MCP config as inline JSON
   instead of a file path. Claude Code refuses to start when an `--mcp-config` file is missing, which would break
   sessions in host-tmux mode. The content is identical. The unit tests and the second manual pass below used the
   inline form.
-- **Manual passes in live Hangar sessions:** a session was started through Hangar's own API (tmux, interactive
+- **Manual passes in live Sidus sessions:** a session was started through Sidus's own API (tmux, interactive
   Claude), and an idea was typed into the terminal. This was done twice: once with the config file (a meal
   planner), and once with the inline config (a GPX ride tracker). Both times Claude filed one project with 5
-  milestones, linked to the session ID Hangar started it with, without asking for permission to use the Ideas
+  milestones, linked to the session ID Sidus started it with, without asking for permission to use the Ideas
   tools. Claude also confirmed the meal planner in one line. The ride-tracker reply wasn't checked.
 
 ## Observations

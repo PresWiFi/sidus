@@ -1,10 +1,10 @@
-"""Duplicate detection. The threshold in hangar/ideas/similar.py is tuned against these lists."""
+"""Duplicate detection. The threshold in sidus/ideas/similar.py is tuned against these lists."""
 import pytest
 
-from hangar.ideas import similar
+from sidus.ideas import similar
 
 SAME_IDEA = [
-    ("Hangar Ideas plugin", "Ideas plugin for Hangar"),
+    ("Sidus Ideas plugin", "Ideas plugin for Sidus"),
     ("Garden watering planner", "Garden Watering Planner App"),
     ("Photo culling tool", "photo-culling tool"),
     ("Recipe organiser", "Recipe organizer"),

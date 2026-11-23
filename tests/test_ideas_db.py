@@ -2,7 +2,7 @@ import sqlite3
 
 import pytest
 
-from hangar.ideas import db, repo
+from sidus.ideas import db, repo
 
 
 def _version(path):

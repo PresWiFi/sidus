@@ -6,32 +6,32 @@ import sys
 import tempfile
 from pathlib import Path
 
-from hangar import plugins
+from sidus import plugins
 
 ROOT = Path(__file__).resolve().parent.parent
 
 CHECK_OFF = """
 import json
 from fastapi.testclient import TestClient
-from hangar import auth
-from hangar.app import app
-c = TestClient(app, headers={"X-Hangar": "1"})
+from sidus import auth
+from sidus.app import app
+c = TestClient(app, headers={"X-Sidus": "1"})
 c.cookies.set(auth.COOKIE, auth.make_token())
 print(json.dumps({
     "routes": [r.path for r in app.routes if "ideas" in r.path],
     "me": c.get("/api/me").json()["plugins"],
     "get": c.get("/api/ideas/projects").status_code,
     "bearer": TestClient(app, headers={"Authorization": "Bearer x"}).get("/api/ideas/projects").status_code,
-    "modules": sorted(m for m in __import__("sys").modules if m.startswith("hangar.ideas")),
-    "claude_args": "--mcp-config" in __import__("hangar.tmux").tmux.claude_command([]),
+    "modules": sorted(m for m in __import__("sys").modules if m.startswith("sidus.ideas")),
+    "claude_args": "--mcp-config" in __import__("sidus.tmux").tmux.claude_command([]),
 }))
 """
 
 
 def _run_off(plugins_value: str) -> tuple[dict, Path]:
-    tmp = Path(tempfile.mkdtemp(prefix="hangar-off-"))
-    env = {**os.environ, "HANGAR_PLUGINS": plugins_value, "HANGAR_DATA_DIR": str(tmp / "data"),
-           "CLAUDE_CONFIG_DIR": str(tmp / "claude"), "HANGAR_PASSWORD": "x"}
+    tmp = Path(tempfile.mkdtemp(prefix="sidus-off-"))
+    env = {**os.environ, "SIDUS_PLUGINS": plugins_value, "SIDUS_DATA_DIR": str(tmp / "data"),
+           "CLAUDE_CONFIG_DIR": str(tmp / "claude"), "SIDUS_PASSWORD": "x"}
     out = subprocess.run([sys.executable, "-c", CHECK_OFF], cwd=ROOT, env=env, capture_output=True, text=True,
                          timeout=60, check=True)
     return json.loads(out.stdout.strip().splitlines()[-1]), tmp / "data"

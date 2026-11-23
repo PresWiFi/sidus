@@ -1,6 +1,6 @@
-# Running inside Hangar
+# Running inside Sidus
 
-This Claude Code session runs inside the Hangar Docker container (Debian bookworm), not directly on the user's computer.
+This Claude Code session runs inside the Sidus Docker container (Debian bookworm), not directly on the user's computer.
 
 - If a task needs a tool that isn't installed, you can install it with `sudo apt-get install -y <package>` (run `sudo apt-get update` first if the package isn't found). Every sudo command shows the user a permission prompt, so say briefly what you want to install and why before running it.
 - Packages installed with apt are remembered and reinstalled automatically when the container is recreated.

@@ -1,4 +1,4 @@
-"""Ideas plugin eval: real headless Claude Code runs against a throwaway Hangar with the Ideas plugin on.
+"""Ideas plugin eval: real headless Claude Code runs against a throwaway Sidus with the Ideas plugin on.
 
 This uses your Claude account (about 50 runs for the full set). Run it from the repo root:
 
@@ -6,9 +6,9 @@ This uses your Claude account (about 50 runs for the full set). Run it from the 
 
 Scenarios run in that order: `repeat` re-mentions the ideas `new` filed, and `discard` resumes the `new` sessions.
 Results go to <work dir>/results.jsonl and one PASS/FAIL line per run is printed. The Python running this needs
-Hangar's requirements (including mcp). Set IDEAS_EVAL_DIR to keep the work folder somewhere specific, and
-IDEAS_EVAL_BASE_ARGS to add the arguments your Hangar install passes to Claude (for example the Docker image's
-HANGAR_CLAUDE_BASE_ARGS).
+Sidus's requirements (including mcp). Set IDEAS_EVAL_DIR to keep the work folder somewhere specific, and
+IDEAS_EVAL_BASE_ARGS to add the arguments your Sidus install passes to Claude (for example the Docker image's
+SIDUS_CLAUDE_BASE_ARGS).
 """
 import concurrent.futures as cf
 import json
@@ -26,7 +26,7 @@ from pathlib import Path
 
 APP = Path(__file__).resolve().parents[2]
 PY = sys.executable
-HERE = Path(os.environ.get("IDEAS_EVAL_DIR") or Path(tempfile.gettempdir()) / "hangar-ideas-eval")
+HERE = Path(os.environ.get("IDEAS_EVAL_DIR") or Path(tempfile.gettempdir()) / "sidus-ideas-eval")
 DATA, WS = HERE / "data", HERE / "ws"
 PORT = int(os.environ.get("IDEAS_EVAL_PORT", "7980"))
 URL = f"http://127.0.0.1:{PORT}"
@@ -82,11 +82,11 @@ def start_server(token_ok=True):
     HERE.mkdir(parents=True, exist_ok=True)
     DATA.mkdir(parents=True, exist_ok=True)
     WS.mkdir(parents=True, exist_ok=True)
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("HANGAR_", "CLAUDE"))}
-    env.update(HANGAR_DATA_DIR=str(DATA), HANGAR_PASSWORD="dev", HANGAR_PORT=str(PORT), HANGAR_HOST="127.0.0.1",
-               HANGAR_WORKSPACES=str(WS), HANGAR_TMUX_SOCKET=str(Path(tempfile.gettempdir()) / f"hgev-{PORT}.sock"), HANGAR_PLUGINS="ideas")
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("SIDUS_", "CLAUDE"))}
+    env.update(SIDUS_DATA_DIR=str(DATA), SIDUS_PASSWORD="dev", SIDUS_PORT=str(PORT), SIDUS_HOST="127.0.0.1",
+               SIDUS_WORKSPACES=str(WS), SIDUS_TMUX_SOCKET=str(Path(tempfile.gettempdir()) / f"hgev-{PORT}.sock"), SIDUS_PLUGINS="ideas")
     log = open(HERE / "server.log", "a")
-    p = subprocess.Popen([PY, "-m", "hangar"], cwd=APP, env=env, stdout=log, stderr=log, start_new_session=True)
+    p = subprocess.Popen([PY, "-m", "sidus"], cwd=APP, env=env, stdout=log, stderr=log, start_new_session=True)
     (HERE / "server.pid").write_text(str(p.pid))
     for _ in range(100):
         try:
@@ -138,19 +138,19 @@ def detail(pid):
 
 def claude_env():
     return {k: v for k, v in os.environ.items()
-            if not k.startswith(("HANGAR_", "CLAUDE_CODE_", "CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT"))}
+            if not k.startswith(("SIDUS_", "CLAUDE_CODE_", "CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT"))}
 
 
-def hangar_mcp_config(token_file=None):
-    """The same --mcp-config value Hangar passes to its sessions (see hangar/ideas/connect.py)."""
-    env = {"HANGAR_URL": URL, "PYTHONPATH": str(APP),
-           "HANGAR_IDEAS_TOKEN_FILE": str(token_file or DATA / "ideas-token")}
-    return json.dumps({"mcpServers": {"hangar-ideas": {"command": PY, "args": ["-m", "hangar.ideas.mcp"], "env": env}}})
+def sidus_mcp_config(token_file=None):
+    """The same --mcp-config value Sidus passes to its sessions (see sidus/ideas/connect.py)."""
+    env = {"SIDUS_URL": URL, "PYTHONPATH": str(APP),
+           "SIDUS_IDEAS_TOKEN_FILE": str(token_file or DATA / "ideas-token")}
+    return json.dumps({"mcpServers": {"sidus-ideas": {"command": PY, "args": ["-m", "sidus.ideas.mcp"], "env": env}}})
 
 
 def run_claude(prompt, cwd, *, session=None, resume=None, extra=(), persist=False, mcp_config=None):
-    args = ["claude", *BASE_ARGS, "--mcp-config", mcp_config or hangar_mcp_config(),
-            "--allowedTools", "mcp__hangar-ideas__*", *extra]
+    args = ["claude", *BASE_ARGS, "--mcp-config", mcp_config or sidus_mcp_config(),
+            "--allowedTools", "mcp__sidus-ideas__*", *extra]
     if resume:
         args += ["--resume", resume]
     else:
@@ -265,18 +265,18 @@ def scenario_routine():
 
 
 def opening_prompt(project):
-    """Same text Hangar's "Work on next milestone" button sends."""
+    """Same text Sidus's "Work on next milestone" button sends."""
     sys.path.insert(0, str(APP))
-    os.environ.setdefault("HANGAR_DATA_DIR", str(HERE / "harness-data"))
-    from hangar.ideas.repo import opening_prompt as op
+    os.environ.setdefault("SIDUS_DATA_DIR", str(HERE / "harness-data"))
+    from sidus.ideas.repo import opening_prompt as op
     return op(project)
 
 
 def scenario_milestone():
     opening_prompt  # imported lazily below; warm it up before the threads start
     sys.path.insert(0, str(APP))
-    os.environ.setdefault("HANGAR_DATA_DIR", str(HERE / "harness-data"))
-    import hangar.ideas.repo  # noqa: F401
+    os.environ.setdefault("SIDUS_DATA_DIR", str(HERE / "harness-data"))
+    import sidus.ideas.repo  # noqa: F401
 
     def one(i):
         path = folder(f"greeter-{i}")
@@ -330,7 +330,7 @@ def scenario_down():
 def scenario_badtoken():
     bad = HERE / "bad-token"
     bad.write_text("not-the-token\n")
-    path = hangar_mcp_config(bad)
+    path = sidus_mcp_config(bad)
     prompt = "I want to build a little app that tracks which friends I owe a call to and nudges me weekly."
     sid = str(uuid.uuid4())
     res = run_claude(prompt, folder("chat"), session=sid, mcp_config=path)
