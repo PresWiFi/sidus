@@ -3,6 +3,7 @@ uses the bearer token, which only works for /api/team/mcp/*."""
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 from pathlib import Path
 from typing import Annotated, Literal
@@ -11,11 +12,12 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, StringConstraints
 
-from ..ideas import repo as ideas
-from . import db, engine, procs, usage
+from .. import files
+from . import db, engine, parse, procs, usage
 
 router = APIRouter(prefix="/api/team")
 STATIC = Path(__file__).with_name("static")
+MAX_GOAL = 200_000   # characters; a long runbook is fine, it stays in a file
 
 
 def _text(n: int, required: bool = False):
@@ -28,75 +30,48 @@ Assignee = Literal["claude", "codex", "any"]
 async def _call(fn, *args):
     try:
         return await asyncio.to_thread(fn, *args)
-    except ideas.NotFound as e:
-        raise HTTPException(404, str(e))
-    except (ideas.Invalid, engine.ToolRefused) as e:
+    except engine.Refused as e:
         raise HTTPException(409, str(e))
 
 
-def _plan(plan_id: str) -> dict:
-    plan = db.get_plan(plan_id)
-    if not plan:
-        raise HTTPException(404, "Plan not found")
-    return plan
+def _goal(goal_id: str) -> dict:
+    goal = db.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(404, "Goal not found")
+    return goal
 
 
 def _live(run: dict) -> dict:
     """A running run's progress so far, read from its log."""
     if run["status"] != "running" or not run["log"]:
         return run
-    from . import parse
     p = parse.read(run["agent"], run["log"])
     return {**run, "steps": p["steps"], "files": p["files"], "result": p["text"], "tokens": p["tokens"]}
 
 
-def _detail(plan: dict) -> dict:
-    try:
-        project = ideas.get_project(plan["project_id"])
-        milestone = next((m for m in project["milestones"] if m["id"] == plan["milestone_id"]), None)
-    except ideas.NotFound:
-        project, milestone = None, None
-    runs = [_live(r) for r in db.runs(plan["id"])]
-    return {**plan, "project": {"id": project["id"], "title": project["title"], "slug": project["slug"]} if project
-            else None, "milestone": milestone, "tasks": db.tasks(plan["id"]), "runs": runs,
-            "comments": db.comments(plan["id"]), "tokens": sum(r["tokens"] for r in runs),
+def _summary(goal: dict) -> dict:
+    phases = db.phases(goal["id"])
+    runs = db.runs(goal["id"])
+    current = next((p for p in phases if p["status"] in ("todo", "active")), None)
+    return {**{k: v for k, v in goal.items() if k != "goal"}, "tokens": sum(r["tokens"] for r in runs),
+            "phases_done": sum(p["status"] in ("done", "skipped") for p in phases), "phases_total": len(phases),
+            "current_phase": current["title"] if current else None,
             "running": any(r["status"] == "running" and r["role"] != "ask" for r in runs)}
 
 
-# ---------- overview ----------
+def _detail(goal: dict) -> dict:
+    tasks = db.tasks(goal["id"])
+    phases = [{**p, "tasks": [t for t in tasks if t["phase_id"] == p["id"]]} for p in db.phases(goal["id"])]
+    return {**_summary(goal), "goal": goal["goal"], "phases": phases, "runs": [_live(r) for r in db.runs(goal["id"])],
+            "comments": db.comments(goal["id"])}
+
+
+# ---------- overview / settings ----------
 
 @router.get("/overview")
 async def overview():
-    """Ideas projects that have a folder, their open milestones, and Team plans."""
     def run():
-        plans = db.list_plans()
-        by_milestone = {}
-        for p in plans:
-            if p["status"] not in ("done", "cancelled"):
-                by_milestone.setdefault(p["milestone_id"], p)
-        projects = []
-        for summary in ideas.list_projects():
-            if not summary.get("repo_path") or summary["status"] in ("shipped", "killed"):
-                continue
-            project = ideas.get_project(summary["id"])
-            projects.append({
-                "id": project["id"], "title": project["title"], "slug": project["slug"],
-                "status": project["status"], "repo_path": project["repo_path"],
-                "milestones": [{**m, "plan": by_milestone.get(m["id"])} for m in project["milestones"]
-                               if m["status"] in ("todo", "doing")],
-            })
-        recent = [{**p, "tokens": sum(r["tokens"] for r in db.runs(p["id"]))} for p in plans[:30]]
-        names: dict[int, dict] = {}
-        for p in recent:
-            if p["project_id"] not in names:
-                try:
-                    proj = ideas.get_project(p["project_id"])
-                    names[p["project_id"]] = {"title": proj["title"], **{m["id"]: m["title"] for m in proj["milestones"]}}
-                except ideas.NotFound:
-                    names[p["project_id"]] = {}
-            p["project_title"] = names[p["project_id"]].get("title")
-            p["milestone_title"] = names[p["project_id"]].get(p["milestone_id"])
-        return {"projects": projects, "plans": recent, "usage": usage.status()}
+        return {"goals": [_summary(g) for g in db.list_goals()[:50]], "usage": usage.status()}
     return await asyncio.to_thread(run)
 
 
@@ -115,23 +90,37 @@ async def save_settings(body: SettingsIn):
     return usage.save_settings(**body.model_dump(exclude_none=True))
 
 
-# ---------- plans ----------
+# ---------- goals ----------
 
-class PlanIn(BaseModel):
-    project_id: int
-    milestone_id: int
-    request: _text(5000) = ""
-
-
-@router.post("/plans")
-async def create_plan(body: PlanIn):
-    plan = await _call(engine.start_plan, body.project_id, body.milestone_id, body.request)
-    return _detail(plan)
+class GoalIn(BaseModel):
+    title: _text(120, required=True)
+    cwd: _text(1024, required=True)
+    goal: _text(MAX_GOAL) = ""
+    runbook: _text(1024) = ""        # a file in the folder, relative or absolute
 
 
-@router.get("/plans/{plan_id}")
-async def get_plan(plan_id: str):
-    return await asyncio.to_thread(_detail, _plan(plan_id))
+@router.post("/goals")
+async def create_goal(body: GoalIn):
+    cwd = os.path.realpath(os.path.expanduser(body.cwd))
+    if not os.path.isdir(cwd):
+        raise HTTPException(400, f"Folder not found: {cwd}")
+    if not files.inside_workspace(cwd):
+        raise HTTPException(403, "Outside the configured workspaces (SIDUS_WORKSPACES)")
+    runbook = None
+    if body.runbook:
+        path = os.path.realpath(os.path.join(cwd, body.runbook))
+        if not (path == cwd or path.startswith(cwd + os.sep)) or not os.path.isfile(path):
+            raise HTTPException(400, f"Runbook not found in the folder: {body.runbook}")
+        runbook = os.path.relpath(path, cwd)
+    if not body.goal and not runbook:
+        raise HTTPException(400, "Describe the goal or point to a runbook")
+    goal = body.goal or f"Carry out the runbook {runbook}."
+    return _detail(await asyncio.to_thread(engine.start_goal, body.title, cwd, goal, runbook))
+
+
+@router.get("/goals/{goal_id}")
+async def get_goal(goal_id: str):
+    return await asyncio.to_thread(_detail, _goal(goal_id))
 
 
 class TextIn(BaseModel):
@@ -142,55 +131,55 @@ class NoteIn(BaseModel):
     note: _text(5000) = ""
 
 
-@router.post("/plans/{plan_id}/answer")
-async def answer(plan_id: str, body: TextIn):
-    _plan(plan_id)
-    return _detail(await _call(engine.answer, plan_id, body.text))
+@router.post("/goals/{goal_id}/answer")
+async def answer(goal_id: str, body: TextIn):
+    _goal(goal_id)
+    return _detail(await _call(engine.answer, goal_id, body.text))
 
 
-@router.post("/plans/{plan_id}/approve")
-async def approve(plan_id: str):
-    _plan(plan_id)
-    return _detail(await _call(engine.approve, plan_id))
+@router.post("/goals/{goal_id}/approve")
+async def approve(goal_id: str):
+    _goal(goal_id)
+    return _detail(await _call(engine.approve, goal_id))
 
 
-@router.post("/plans/{plan_id}/replan")
-async def replan(plan_id: str, body: NoteIn):
-    _plan(plan_id)
-    return _detail(await _call(engine.replan, plan_id, body.note))
+@router.post("/goals/{goal_id}/replan")
+async def replan(goal_id: str, body: NoteIn):
+    _goal(goal_id)
+    return _detail(await _call(engine.replan, goal_id, body.note))
 
 
-@router.post("/plans/{plan_id}/pause")
-async def pause(plan_id: str):
-    _plan(plan_id)
-    return _detail(await _call(engine.pause, plan_id))
+@router.post("/goals/{goal_id}/pause")
+async def pause(goal_id: str):
+    _goal(goal_id)
+    return _detail(await _call(engine.pause, goal_id))
 
 
-@router.post("/plans/{plan_id}/resume")
-async def resume(plan_id: str):
-    _plan(plan_id)
-    return _detail(await _call(engine.resume, plan_id))
+@router.post("/goals/{goal_id}/resume")
+async def resume(goal_id: str):
+    _goal(goal_id)
+    return _detail(await _call(engine.resume, goal_id))
 
 
-@router.post("/plans/{plan_id}/stop")
-async def stop(plan_id: str):
-    _plan(plan_id)
-    return {"stopped": await asyncio.to_thread(engine.stop, plan_id)}
+@router.post("/goals/{goal_id}/stop")
+async def stop(goal_id: str):
+    _goal(goal_id)
+    return {"stopped": await asyncio.to_thread(engine.stop, goal_id)}
 
 
-@router.post("/plans/{plan_id}/cancel")
-async def cancel(plan_id: str):
-    _plan(plan_id)
-    return _detail(await _call(engine.cancel, plan_id))
+@router.post("/goals/{goal_id}/cancel")
+async def cancel(goal_id: str):
+    _goal(goal_id)
+    return _detail(await _call(engine.cancel, goal_id))
 
 
-@router.delete("/plans/{plan_id}")
-async def delete_plan(plan_id: str):
-    _plan(plan_id)
-    if db.running_run(plan_id, include_asks=True):
+@router.delete("/goals/{goal_id}")
+async def delete_goal(goal_id: str):
+    _goal(goal_id)
+    if db.running_run(goal_id, include_asks=True):
         raise HTTPException(409, "Stop the running work first")
-    db.delete_plan(plan_id)
-    shutil.rmtree(procs.log_dir(plan_id), ignore_errors=True)
+    db.delete_goal(goal_id)
+    shutil.rmtree(procs.log_dir(goal_id), ignore_errors=True)
     return {"ok": True}
 
 
@@ -199,15 +188,74 @@ class CommentIn(BaseModel):
     task_id: str | None = None
 
 
-@router.post("/plans/{plan_id}/comments")
-async def add_comment(plan_id: str, body: CommentIn):
-    _plan(plan_id)
-    if body.task_id and (db.get_task(body.task_id) or {}).get("plan_id") != plan_id:
+@router.post("/goals/{goal_id}/comments")
+async def add_comment(goal_id: str, body: CommentIn):
+    _goal(goal_id)
+    if body.task_id and (db.get_task(body.task_id) or {}).get("goal_id") != goal_id:
         raise HTTPException(404, "Task not found")
-    return db.comment(plan_id, "you", body.text, task_id=body.task_id)
+    return db.comment(goal_id, "you", body.text, task_id=body.task_id)
 
 
-# ---------- tasks ----------
+# ---------- phases and tasks ----------
+
+class PhaseIn(BaseModel):
+    title: _text(120, required=True)
+    details: _text(2000) = ""
+    done_when: _text(500) = ""
+
+
+class PhasePatch(BaseModel):
+    title: _text(120, required=True) | None = None
+    details: _text(2000) | None = None
+    done_when: _text(500) | None = None
+    position: Annotated[int, Field(ge=1)] | None = None
+    status: Literal["skipped", "todo"] | None = None
+
+
+def _open_goal(goal_id: str) -> dict:
+    goal = _goal(goal_id)
+    if goal["status"] in ("done", "cancelled"):
+        raise HTTPException(409, "This goal is finished")
+    return goal
+
+
+@router.post("/goals/{goal_id}/phases")
+async def add_phase(goal_id: str, body: PhaseIn):
+    _open_goal(goal_id)
+    return db.add_phase(goal_id, body.title, body.details, body.done_when)
+
+
+@router.patch("/phases/{phase_id}")
+async def update_phase(phase_id: str, body: PhasePatch):
+    phase = db.get_phase(phase_id)
+    if not phase:
+        raise HTTPException(404, "Phase not found")
+    _open_goal(phase["goal_id"])
+    fields = body.model_dump(exclude_none=True)
+    if phase["status"] in ("active", "done") and fields.keys() - {"title", "status"}:
+        raise HTTPException(409, "This phase has started; you can rename or skip it")
+    if fields.get("status") and (phase["status"] == "done" or db.running_run(phase["goal_id"])):
+        raise HTTPException(409, "Stop the running work before skipping a phase")
+    position = fields.pop("position", None)
+    if fields:
+        db.update_phase(phase_id, **fields)
+    if position:
+        db.move_phase(phase_id, position)
+    await asyncio.to_thread(engine.kick, phase["goal_id"])
+    return db.get_phase(phase_id)
+
+
+@router.delete("/phases/{phase_id}")
+async def delete_phase(phase_id: str):
+    phase = db.get_phase(phase_id)
+    if not phase:
+        raise HTTPException(404, "Phase not found")
+    _open_goal(phase["goal_id"])
+    if phase["status"] != "todo":
+        raise HTTPException(409, "Only phases that haven't started can be deleted; skip it instead")
+    db.delete_phase(phase_id)
+    return {"ok": True}
+
 
 class TaskIn(BaseModel):
     title: _text(120, required=True)
@@ -225,22 +273,23 @@ class TaskPatch(BaseModel):
     status: Literal["todo", "skipped"] | None = None   # retry or skip a task
 
 
+@router.post("/phases/{phase_id}/tasks")
+async def add_task(phase_id: str, body: TaskIn):
+    phase = db.get_phase(phase_id)
+    if not phase:
+        raise HTTPException(404, "Phase not found")
+    _open_goal(phase["goal_id"])
+    if phase["status"] in ("done", "skipped"):
+        raise HTTPException(409, "This phase is finished")
+    task = db.add_task(phase_id, body.title, body.details, body.done_when, body.assignee)
+    await asyncio.to_thread(engine.kick, phase["goal_id"])
+    return task
+
+
 def _editable(task: dict) -> None:
-    plan = db.get_plan(task["plan_id"])
-    if plan["status"] in ("done", "cancelled"):
-        raise HTTPException(409, "This plan is finished")
+    _open_goal(task["goal_id"])
     if task["status"] in ("working", "review"):
         raise HTTPException(409, "This task is being worked on")
-
-
-@router.post("/plans/{plan_id}/tasks")
-async def add_task(plan_id: str, body: TaskIn):
-    plan = _plan(plan_id)
-    if plan["status"] in ("done", "cancelled"):
-        raise HTTPException(409, "This plan is finished")
-    task = db.add_task(plan_id, body.title, body.details, body.done_when, body.assignee)
-    await asyncio.to_thread(engine.kick, plan_id)
-    return task
 
 
 @router.patch("/tasks/{task_id}")
@@ -258,9 +307,9 @@ async def update_task(task_id: str, body: TaskPatch):
     if position:
         db.move_task(task_id, position)
     if "status" in fields:
-        plan = db.get_plan(task["plan_id"])
-        if plan["status"] == "paused" and plan["waiting"] and "failed" in plan["waiting"]:
-            await asyncio.to_thread(engine.resume, plan["id"])
+        goal = db.get_goal(task["goal_id"])
+        if goal["status"] == "paused" and goal["waiting"] and "failed" in goal["waiting"]:
+            await _call(engine.resume, goal["id"])
     return db.get_task(task_id)
 
 
@@ -271,7 +320,7 @@ async def delete_task(task_id: str):
         raise HTTPException(404, "Task not found")
     _editable(task)
     if task["status"] == "done":
-        raise HTTPException(409, "Finished tasks stay in the plan")
+        raise HTTPException(409, "Finished tasks stay in the goal")
     db.delete_task(task_id)
     return {"ok": True}
 
@@ -290,7 +339,12 @@ class McpTask(BaseModel):
     assignee: Assignee = "any"
 
 
-class McpPropose(McpIn):
+class McpPhases(McpIn):
+    phases: Annotated[list[PhaseIn], Field(min_length=1, max_length=8)]
+    first_tasks: Annotated[list[McpTask], Field(min_length=1, max_length=12)]
+
+
+class McpTasks(McpIn):
     tasks: Annotated[list[McpTask], Field(min_length=1, max_length=12)]
 
 
@@ -319,8 +373,9 @@ class McpCreate(McpIn, McpTask):
     pass
 
 
-class McpSummary(McpIn):
+class McpComplete(McpIn):
     summary: _text(2000, required=True)
+    next_tasks: Annotated[list[McpTask], Field(max_length=12)] = []
 
 
 class McpAsk(McpIn):
@@ -331,9 +386,18 @@ async def _tool(fn, *args):
     return {"result": await _call(fn, *args)}
 
 
+def _dump(items) -> list[dict]:
+    return [i.model_dump() for i in items]
+
+
+@router.post("/mcp/propose_phases")
+async def mcp_phases(b: McpPhases):
+    return await _tool(engine.tool_propose_phases, b.run, b.agent, _dump(b.phases), _dump(b.first_tasks))
+
+
 @router.post("/mcp/propose_tasks")
-async def mcp_propose(b: McpPropose):
-    return await _tool(engine.tool_propose, b.run, b.agent, [t.model_dump() for t in b.tasks])
+async def mcp_tasks(b: McpTasks):
+    return await _tool(engine.tool_propose_tasks, b.run, b.agent, _dump(b.tasks))
 
 
 @router.post("/mcp/ask_user")
@@ -371,9 +435,9 @@ async def mcp_create(b: McpCreate):
     return await _tool(engine.tool_create, b.run, b.agent, b.title, b.details, b.done_when, b.assignee)
 
 
-@router.post("/mcp/complete_milestone")
-async def mcp_complete(b: McpSummary):
-    return await _tool(engine.tool_complete, b.run, b.agent, b.summary)
+@router.post("/mcp/complete_phase")
+async def mcp_complete(b: McpComplete):
+    return await _tool(engine.tool_complete_phase, b.run, b.agent, b.summary, _dump(b.next_tasks))
 
 
 @router.post("/mcp/ask")

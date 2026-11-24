@@ -1,4 +1,4 @@
-"""The Team plugin definition, loaded by Sidus when SIDUS_PLUGINS includes team (with ideas)."""
+"""The Team plugin definition, loaded by Sidus when SIDUS_PLUGINS includes team."""
 from __future__ import annotations
 
 import threading
