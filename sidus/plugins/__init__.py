@@ -28,8 +28,11 @@ class Plugin:
     claude_args: Callable[[], list[str]] | None = None
 
     def public(self) -> dict:
-        """What the web UI needs to know (sent in /api/me)."""
-        return {"name": self.name, "nav": self.nav, "script": self.script, "style": self.style}
+        """What the web UI needs to know (sent in /api/me). Script and style URLs carry the Sidus version, so an
+        update isn't hidden behind a browser cache that a proxy told to keep them for hours."""
+        from .. import __version__
+        stamp = lambda url: f"{url}{'&' if '?' in url else '?'}v={__version__}" if url else url
+        return {"name": self.name, "nav": self.nav, "script": stamp(self.script), "style": stamp(self.style)}
 
     @property
     def prefix(self) -> str:
