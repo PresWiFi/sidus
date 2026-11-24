@@ -2,9 +2,10 @@
 through --mcp-config, for Codex through -c mcp_servers.
 
 The tools depend on the run's role (SIDUS_TEAM_ROLE):
-  plan    (manager)  propose_tasks, ask_user, comment
+  outline (manager)  propose_phases, ask_user, comment
+  phase   (manager)  propose_tasks, comment
+  wrapup  (manager)  complete_phase, create_task, comment
   review  (manager)  approve_task, revise_task, skip_task, create_task, comment
-  wrapup  (manager)  complete_milestone, create_task, comment
   work    (worker)   ask_claude / ask_codex, task_blocked, comment
 It's a thin client over Sidus's /api/team/mcp REST API, signed in with the Team token.
 """
@@ -57,7 +58,7 @@ def call(tool: str, body: dict, timeout: float = 20):
 
 
 server = MCPServer(name="sidus-team", title="Sidus Team",
-                   instructions="Tools for working on a Sidus Team plan. Keep messages short.")
+                   instructions="Tools for working on a Sidus Team goal. Keep messages short.")
 READ = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
 WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
 UPFRONT = {"anthropic/alwaysLoad": True}
@@ -80,16 +81,41 @@ def comment(text: Short(4000, "The comment")) -> str:
 
 server.tool(annotations=WRITE, meta=UPFRONT)(comment)
 
-if ROLE == "plan":
+class PhaseIn(BaseModel):
+    title: Short(120, "Short phase name")
+    details: Short(2000, "What the phase covers; for a runbook, which section or steps") = ""
+    done_when: Short(500, "Something checkable") = ""
+
+
+Tasks = Annotated[list[TaskIn], Field(max_length=12)]
+
+if ROLE == "outline":
     @server.tool(annotations=WRITE, meta=UPFRONT)
-    def propose_tasks(tasks: Annotated[list[TaskIn], Field(min_length=1, max_length=12)]) -> str:
-        """Propose the milestone's tasks, in order. Replaces any you proposed before. The user approves them."""
-        return call("propose_tasks", {"tasks": [t.model_dump() for t in tasks]})
+    def propose_phases(phases: Annotated[list[PhaseIn], Field(min_length=1, max_length=8)],
+                       first_tasks: Annotated[list[TaskIn], Field(min_length=1, max_length=12)]) -> str:
+        """Propose the goal's phases in order, plus the tasks for phase 1. Replaces any you proposed before. The
+        user approves the phases once; later phases' tasks are planned when each phase starts."""
+        return call("propose_phases", {"phases": [p.model_dump() for p in phases],
+                                       "first_tasks": [t.model_dump() for t in first_tasks]})
 
     @server.tool(annotations=WRITE, meta=UPFRONT)
     def ask_user(questions: Annotated[list[Short(300, "One short question")], Field(min_length=1, max_length=3)]) -> str:
         """Ask the user up to 3 short questions when the answer changes the plan. Then end your turn."""
         return call("ask_user", {"questions": questions})
+
+if ROLE == "phase":
+    @server.tool(annotations=WRITE, meta=UPFRONT)
+    def propose_tasks(tasks: Annotated[list[TaskIn], Field(min_length=1, max_length=12)]) -> str:
+        """Set the current phase's tasks, in order. They start when your turn ends."""
+        return call("propose_tasks", {"tasks": [t.model_dump() for t in tasks]})
+
+if ROLE == "wrapup":
+    @server.tool(annotations=WRITE, meta=UPFRONT)
+    def complete_phase(summary: Short(2000, "1-3 lines: what the phase achieved (2-4 for the user if it's the last)"),
+                       next_tasks: Tasks = []) -> str:
+        """The phase's done-when is met: mark it done and give the next phase's tasks. After the last phase this
+        finishes the goal."""
+        return call("complete_phase", {"summary": summary, "next_tasks": [t.model_dump() for t in next_tasks]})
 
 if ROLE == "review":
     @server.tool(annotations=WRITE, meta=UPFRONT)
@@ -113,12 +139,6 @@ if ROLE in ("review", "wrapup"):
                     done_when: Short(500, "Something checkable") = "", assignee: Assignee = "any") -> str:
         """Add a task at the end of the plan. Only for work that's needed to meet the milestone."""
         return call("create_task", {"title": title, "details": details, "done_when": done_when, "assignee": assignee})
-
-if ROLE == "wrapup":
-    @server.tool(annotations=WRITE, meta=UPFRONT)
-    def complete_milestone(summary: Short(2000, "2-4 lines for the user: what was done, anything to check")) -> str:
-        """The milestone's done-when is met: mark it done in Ideas and finish the plan."""
-        return call("complete_milestone", {"summary": summary})
 
 if ROLE == "work":
     def ask(question: Short(20000, "The question, with the context the other agent needs")) -> str:

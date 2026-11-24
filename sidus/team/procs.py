@@ -52,7 +52,8 @@ def mcp_env(run_id: str, agent: str, role: str) -> dict:
 
 
 def claude_cmd(prompt: str, *, session: str | None = None, new_session: str | None = None, fork: bool = False,
-               mcp: dict | None = None, manager: bool = False, read_only: bool = False) -> list[str]:
+               mcp: dict | None = None, manager: bool = False, read_only: bool = False,
+               add_dirs: list[str] | None = None) -> list[str]:
     s = usage.get_settings()
     args = [settings.claude_cmd, *shlex.split(settings.claude_base_args)]
     # Other plugins' MCP servers (e.g. Ideas) go into the same --mcp-config as Team's, so there's one of each flag.
@@ -88,6 +89,8 @@ def claude_cmd(prompt: str, *, session: str | None = None, new_session: str | No
         args += ["--mcp-config", json.dumps({"mcpServers": servers}, separators=(",", ":"))]
     if allowed:
         args += ["--allowedTools", ",".join(allowed)]
+    for d in add_dirs or []:
+        args += ["--add-dir", d]
     if session:
         args += ["--resume", session] + (["--fork-session"] if fork else [])
     elif new_session:
@@ -204,4 +207,12 @@ def git_changed(cwd: str, before: dict | None) -> list[str]:
                if before["files"].get(p, "clean") != after["files"].get(p, "clean")}
     if before["head"] and after["head"] and before["head"] != after["head"]:
         changed |= set((_git(cwd, "diff", "--name-only", before["head"], after["head"]) or "").split())
-    return sorted(changed)[:200]
+    return sorted(p for p in changed if not _junk(p))[:200]
+
+
+JUNK_PARTS = {"__pycache__", "node_modules", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+
+
+def _junk(path: str) -> bool:
+    """Build and cache output that isn't worth listing as a change (when the repo doesn't ignore it)."""
+    return path.endswith((".pyc", ".pyo")) or bool(JUNK_PARTS & set(Path(path).parts))

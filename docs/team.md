@@ -1,57 +1,59 @@
 # Team plugin
 
-Team turns an Ideas milestone into finished work. A manager (Claude or Codex) plans the milestone into tasks, asking
-you questions first if it needs to. You approve the tasks, then Claude Code and Codex do them one at a time in the
-project's folder. The manager checks the result at the end and marks the milestone done in Ideas.
+Give Team a goal or a runbook and a folder. A manager (Claude or Codex) splits the goal into phases, asking you
+questions first if it needs to. You approve the phases once. Then Claude Code and Codex work through each phase's
+tasks one at a time, and the manager checks each phase before moving on.
 
-It's built to be light on usage. The manager only runs to plan, to decide when a task fails or a worker is blocked,
-and to wrap up. It runs on a smaller model with read-only tools and a step cap. Workers get only their task, its
-thread, and short reports from earlier tasks.
+It's built to be light on usage. The manager runs once to outline, once per phase (one run that checks the phase
+and plans the next), and otherwise only when a task fails or a worker is blocked. It runs on a smaller model with
+read-only tools and a step cap. Long goals and runbooks stay in files; prompts carry only the current phase and
+task.
 
 ## Turn it on
 
-Set `SIDUS_PLUGINS=ideas,team` and restart Sidus. With Docker, add it to `.env`. Team needs Ideas: the projects,
-milestones and folders come from there. Sign in to Claude and to ChatGPT (for Codex) in Settings. With only one
-signed in, that one does everything.
+Set `SIDUS_PLUGINS=team` (or add `team` to the list) and restart Sidus. With Docker, add it to `.env`. Sign in to
+Claude, and to ChatGPT for Codex, in Settings. With only one signed in, that one does everything.
 
 On first start Sidus creates these in its data folder:
 
 | Path | What it is |
 |---|---|
-| `team.db` | Plans, tasks, runs and notes (SQLite) |
+| `team.db` | Goals, phases, tasks, runs and notes (SQLite) |
 | `team-token` | The token the agents' Team tools use to reach Sidus. Readable only by you. It works for `/api/team/mcp/*` and nothing else |
-| `team/<plan>/` | Each run's raw output |
+| `team/<goal>/` | `goal.md` (the goal as you gave it) and each run's raw output |
 
-## How a plan goes
+## How a goal goes
 
-1. **Plan.** On the Team page, click **Plan** next to a milestone, optionally saying what matters. The manager is
-   whichever agent has more usage left; it stays manager for the plan unless it runs out. It reads the project's
-   context file and as much of the code as planning needs.
+1. **Start.** On the Team page, click **New goal**. Pick a folder, then describe the goal, paste a runbook, or name
+   a runbook file in the folder (e.g. `docs/runbook.md`). Long is fine.
 2. **Questions.** If something unclear would change the plan, the manager asks you up to 3 short questions and
    waits for your answers.
-3. **Approve.** The manager proposes 1-6 tasks, each with a "done when" and an assignee (Claude, Codex or either).
-   Edit, reorder, add or delete tasks, then **Approve and start**. **Re-plan** asks the manager again, with a note.
-4. **Work.** Tasks run in order, one at a time per project folder. A task for "either" goes to the agent with more
-   room. A worker checks its own work against "done when" and writes a short report. If it can't finish, it calls
-   `task_blocked` and the manager decides: send it back with notes (to the same agent or the other), approve it,
-   or skip it. After 3 attempts a task fails and the plan pauses for you.
-5. **Wrap-up.** When every task is done, the manager checks the milestone's "done when". It then either marks the
-   milestone done in Ideas, with a short summary, or adds the tasks that are missing.
+3. **Approve.** The manager proposes 1-8 phases, each with a "done when", plus the tasks for phase 1. Edit,
+   reorder, add or delete phases and phase-1 tasks, then click **Approve and start**. **Re-plan** asks the manager
+   again, with a note. This is the only approval.
+4. **Work.** Each phase's tasks run in order, one at a time per folder. A task for "either" goes to the agent with
+   more room. A worker checks its own work against "done when" and writes a short report. If it can't finish, it
+   calls `task_blocked`, and the manager sends the task back with notes (to the same agent or the other), approves
+   it, or skips it. After 3 attempts a task fails and the goal pauses for you.
+5. **Next phase.** When a phase's tasks are done, the manager checks its "done when". In the same run it either
+   finishes the phase and plans the next phase's tasks, or adds the tasks that are missing. After the last phase,
+   the goal is done, with a short summary.
 
-You can pause, resume, stop the current run, cancel, add a note to any task (the next worker reads it), and retry or
-skip a task.
+You can pause, resume, stop the current run, cancel, add a note to any task (the next worker reads it), retry or
+skip a task, add a task to a phase, or skip a phase.
 
 ## Shared context
 
 Everyone works from the same things:
-- The project folder itself.
+- The folder itself.
 - Your `context/` docs. Claude reads `CLAUDE.md` and Codex reads `AGENTS.md`; keep the two identical.
-- The plan: project summary, milestone, your request and answers, and each task's notes.
-- Earlier tasks' reports and the files they changed. Changed files come from `git status` before and after each run,
-  so files written by shell commands count too, as long as the folder is a git repo.
+- The goal file (and the runbook, if you named one). Agents are pointed to it and read the part they need.
+- Each finished phase's summary, earlier tasks' reports in the phase, and each task's notes.
+- The files each task changed. These come from `git status` before and after each run, so files written by shell
+  commands count too, as long as the folder is a git repo. Cache output such as `__pycache__` is left out.
 
 Each worker keeps its own conversation per task, so a task sent back resumes where it left off. The manager keeps
-one conversation per plan.
+one conversation per goal.
 
 ## Usage
 
@@ -59,8 +61,9 @@ An agent is "under" while its 5-hour and weekly use are below the switch point (
 an agent that's under; past that, to the one with more room. An agent that hits its usage limit mid-task is skipped
 until the limit resets, and the other agent continues the task with a note about what was already changed.
 
-Each run shows the tokens it used: new input plus output, not counting cached input. Expect roughly 15-25k per run
-just for each CLI's own system prompt and tools, so fewer, larger tasks use less than many small ones.
+Each run shows the tokens it used: new input plus output, not counting cached input. Every run starts with each
+CLI's own system prompt and tools, so fewer, larger tasks use less than many small ones. As a reference, a
+two-phase goal with one task per phase took 5 runs and about 60k new tokens.
 
 Settings on the Team page:
 
@@ -89,7 +92,13 @@ The `sidus-team` MCP server, with tools by role:
 
 | Role | Tools |
 |---|---|
-| Manager, planning | `propose_tasks`, `ask_user`, `comment` |
+| Manager, outlining | `propose_phases` (with phase 1's tasks), `ask_user`, `comment` |
+| Manager, planning a phase with no tasks | `propose_tasks`, `comment` |
+| Manager, checking a phase | `complete_phase` (with the next phase's tasks), `create_task`, `comment` |
 | Manager, deciding on a task | `approve_task`, `revise_task`, `skip_task`, `create_task`, `comment` |
-| Manager, wrap-up | `complete_milestone`, `create_task`, `comment` |
 | Worker | `ask_claude` / `ask_codex` (the other agent answers without changing files), `task_blocked`, `comment` |
+
+## Upgrading from 0.7.0
+
+0.7.0 planned per Ideas milestone. 0.8.0 starts from goals instead and no longer needs Ideas. On first start it
+drops 0.7.0's Team tables (plans, tasks, runs, notes); Ideas itself is untouched.

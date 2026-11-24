@@ -1,7 +1,8 @@
-"""Team: whole plans run against stand-in claude/codex scripts that call the real tool endpoints over HTTP, the way
+"""Team: whole goals run against stand-in claude/codex scripts that call the real tool endpoints over HTTP, the way
 the MCP server does. Plus the parser, agent picking, and the API's rules."""
 import json
 import socket
+import subprocess
 import sys
 import textwrap
 import threading
@@ -12,7 +13,6 @@ import uvicorn
 
 from sidus.app import app
 from sidus.config import settings
-from sidus.ideas import repo as ideas
 from sidus.store import kv_set
 from sidus.team import db, engine, parse, procs, usage
 
@@ -48,21 +48,33 @@ def tool(name, **body):
     return out
 
 limit = False
-if role == "plan":
+if role == "outline":
     if "ASKME" in prompt and "The user answered" not in prompt:
         tool("ask_user", questions=["Which database?"])
     else:
-        tool("propose_tasks", tasks=[{"title": "Build A", "done_when": "a works", "assignee": "claude"},
-                                     {"title": "Build B" + (" BLOCKME" if "BLOCKME" in prompt else "")
-                                      + (" LIMITME" if "LIMITME" in prompt else ""), "assignee": "codex"}])
+        flags = "".join(f for f in (" BLOCKME", " LIMITME") if f.strip() in prompt)
+        tool("propose_phases", phases=[{"title": "Phase One", "details": "Sections 1-2", "done_when": "one works"},
+                                       {"title": "Phase Two", "done_when": "two works"}],
+             first_tasks=[{"title": "Build A", "done_when": "a works", "assignee": "claude"},
+                          {"title": "Build B" + flags, "assignee": "codex"}])
+elif role == "phase":
+    tool("propose_tasks", tasks=[{"title": "Build C", "assignee": "codex"}])
+elif role == "wrapup":
+    if "Phase 1 of 2" in prompt:
+        nxt = [] if os.path.exists("NOPLAN") else [{"title": "Build C", "assignee": "codex"}]
+        tool("complete_phase", summary="Phase one done.", next_tasks=nxt)
+    else:
+        tool("complete_phase", summary="All built.")
 elif role == "work":
     task = next((l for l in prompt.splitlines() if l.startswith("Your task")), "")
+    if task:
+        open(AGENT + "_out.txt", "a").write("x")   # a file written without an edit tool
+        os.makedirs("__pycache__", exist_ok=True)
+        open("__pycache__/m.cpython-313.pyc", "w").write("x")   # cache output: not listed
     if "BLOCKME" in task:
         tool("task_blocked", reason="missing key")
     if "LIMITME" in task and AGENT == "codex":
         limit = True
-    if task:
-        open(AGENT + "_out.txt", "a").write("x")   # a file written without an edit tool
     if "Build A" in task and os.environ.get("FAKE_ASK"):
         calls.append("answer:" + tool("ask", question="Is A right?"))
 elif role == "review":
@@ -70,13 +82,11 @@ elif role == "review":
         tool("revise_task", notes="Use the env var", assignee="claude")
     else:
         tool("approve_task", notes="fine")
-elif role == "wrapup":
-    tool("complete_milestone", summary="A and B are built.")
 
+out = json.dumps({"agent": AGENT, "role": role, "prompt": prompt, "args": args, "calls": calls})
 if AGENT == "claude":
     print(json.dumps({"type": "system", "subtype": "init", "session_id": sid}))
     print(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": "x.py"}}]}}))
-    out = json.dumps({"agent": AGENT, "role": role, "prompt": prompt, "args": args, "calls": calls})
     print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": out, "session_id": sid,
                       "usage": {"input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 5}}))
 else:
@@ -85,7 +95,6 @@ else:
         print(json.dumps({"type": "turn.failed", "error": {"message": "You've hit your usage limit."}}))
         sys.exit(1)
     print(json.dumps({"type": "item.completed", "item": {"type": "file_change", "changes": [{"path": "y.py"}]}}))
-    out = json.dumps({"agent": AGENT, "role": role, "prompt": prompt, "args": args, "calls": calls})
     print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": out}}))
     print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 50, "output_tokens": 10}}))
 '''
@@ -131,129 +140,133 @@ def team(tmp_path, monkeypatch, workspace, server):
     monkeypatch.setattr(usage, "_codex_usage", lambda: use["codex"])
     folder = workspace / f"teamproj-{tmp_path.name}"
     folder.mkdir(exist_ok=True)
-    import subprocess
     subprocess.run(["git", "init", "-q", str(folder)], check=True)
     subprocess.run(["git", "-C", str(folder), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q",
                     "--allow-empty", "-m", "init"], check=True)
-    created = ideas.create_project(title="Widget", summary="A widget.", repo_path=str(folder),
-                                   milestones=[{"title": "Ship v1", "done_criteria": "A and B work"}])
-    project = created["project"]
-    return {"use": use, "project": project, "milestone": project["milestones"][0]}
+    return {"use": use, "cwd": str(folder)}
 
 
-def settle(plan_id, until, timeout=30):
+def settle(goal_id, until, timeout=30):
     end = time.time() + timeout
     while time.time() < end:
-        plan = db.get_plan(plan_id)
-        if plan["status"] in until and not db.running_run(plan_id, include_asks=True):
-            return plan
+        goal = db.get_goal(goal_id)
+        if goal["status"] in until and not db.running_run(goal_id, include_asks=True):
+            return goal
         time.sleep(0.1)
-    raise AssertionError(f"plan is {db.get_plan(plan_id)['status']}, runs: "
-                         f"{[(r['role'], r['agent'], r['status'], r['error']) for r in db.runs(plan_id)]}")
+    raise AssertionError(f"goal is {db.get_goal(goal_id)['status']} ({db.get_goal(goal_id)['waiting']}), runs: "
+                         f"{[(r['role'], r['agent'], r['status'], r['error'][:200]) for r in db.runs(goal_id)]}")
 
 
 def out(run):
     return json.loads(run["result"])
 
 
-def start(team, request=""):
-    return engine.start_plan(team["project"]["id"], team["milestone"]["id"], request)
+def start(team, goal="Build the widget.", runbook=None):
+    return engine.start_goal("Widget", team["cwd"], goal, runbook)
 
 
-# ---------- whole plans ----------
+def roles(goal_id):
+    return [(r["role"], r["agent"]) for r in db.runs(goal_id)]
 
-def test_plan_approve_work_wrapup(team):
-    plan = settle(start(team)["id"], ("proposed",))
-    assert plan["manager"] == "claude"
-    tasks = db.tasks(plan["id"])
-    assert [t["title"] for t in tasks] == ["Build A", "Build B"] and tasks[1]["assignee"] == "codex"
-    first = db.runs(plan["id"])[0]
-    o = out(first)
-    assert o["role"] == "plan" and "--model" in o["args"] and "sonnet" in o["args"] and "--max-turns" in o["args"]
+
+# ---------- whole goals ----------
+
+def test_outline_approve_phases_done(team):
+    goal = settle(start(team)["id"], ("proposed",))
+    assert goal["manager"] == "claude" and engine.goal_file(goal).read_text() == "Build the widget.\n"
+    phases = db.phases(goal["id"])
+    assert [p["title"] for p in phases] == ["Phase One", "Phase Two"]
+    assert [t["title"] for t in db.tasks(goal["id"], phases[0]["id"])] == ["Build A", "Build B"]
+    assert db.tasks(goal["id"], phases[1]["id"]) == []
+    o = out(db.runs(goal["id"])[0])
+    assert o["role"] == "outline" and "sonnet" in o["args"] and "--max-turns" in o["args"]
     assert o["args"][o["args"].index("--tools") + 1] == procs.MANAGER_TOOLS
-    assert o["args"][o["args"].index("--permission-mode") + 1] == "default"
-    assert "Milestone: Ship v1. Done when: A and B work" in o["prompt"]
+    assert o["args"][o["args"].index("--add-dir") + 1] == str(procs.log_dir(goal["id"]))
+    assert "Goal: Widget\nBuild the widget." in o["prompt"]
 
-    engine.approve(plan["id"])
-    assert ideas.get_project(team["project"]["id"])["milestones"][0]["status"] == "doing"
-    plan = settle(plan["id"], ("done",))
-    runs = db.runs(plan["id"])
-    assert [(r["role"], r["agent"]) for r in runs] == [("plan", "claude"), ("work", "claude"), ("work", "codex"),
-                                                       ("wrapup", "claude")]
-    work_a, work_b = out(runs[1]), out(runs[2])
-    config = json.loads(work_a["args"][work_a["args"].index("--mcp-config") + 1])["mcpServers"]
-    assert set(config) == {"sidus-ideas", "sidus-team"} and work_a["args"].count("--mcp-config") == 1
-    assert work_a["args"][work_a["args"].index("--allowedTools") + 1] == "mcp__sidus-ideas__*,mcp__sidus-team__*"
+    engine.approve(goal["id"])
+    goal = settle(goal["id"], ("done",))
+    assert roles(goal["id"]) == [("outline", "claude"), ("work", "claude"), ("work", "codex"), ("wrapup", "claude"),
+                                 ("work", "codex"), ("wrapup", "claude")]
+    runs = db.runs(goal["id"])
+    work_a, work_c = out(runs[1]), out(runs[4])
     assert work_a["args"][work_a["args"].index("--permission-mode") + 1] == "bypassPermissions"
-    assert "--model" not in work_a["args"]                       # workers use the normal model
-    assert "Your task (1 of 2): Build A" in work_a["prompt"] and "ask_codex" in work_a["prompt"]
-    assert "Earlier tasks:\n- Build A (Claude)" in work_b["prompt"]
-    assert any('model_reasoning_effort' in a for a in out(runs[2])["args"]) is False  # only the manager is lowered
-    assert all(t["status"] == "done" for t in db.tasks(plan["id"]))
-    assert db.tasks(plan["id"])[0]["files"] == ["claude_out.txt", "x.py"]
-    assert db.tasks(plan["id"])[1]["files"] == ["codex_out.txt", "y.py"]
-    assert "Files: claude_out.txt, x.py" in work_b["prompt"]
-    assert ideas.get_project(team["project"]["id"])["milestones"][0]["status"] == "done"
-    assert plan["summary"] == "A and B are built." and sum(r["tokens"] for r in runs) == 120 * 3 + 60
+    assert "--model" not in work_a["args"]
+    assert "Phase 1 of 2: Phase One. Sections 1-2" in work_a["prompt"]
+    assert f"The full goal is in {engine.goal_file(goal)}" in work_a["prompt"]
+    assert "Earlier phases:\n- Phase One: Phase one done." in work_c["prompt"]
+    wrap1 = out(runs[3])
+    assert "next_tasks: the tasks for the next phase, \"Phase Two\"" in wrap1["prompt"]
+    assert "Files: claude_out.txt, x.py" in wrap1["prompt"] and "pycache" not in wrap1["prompt"]
+    assert [p["status"] for p in db.phases(goal["id"])] == ["done", "done"]
+    assert goal["summary"] == "All built." and sum(r["tokens"] for r in runs) == 120 * 4 + 60 * 2
 
 
-def test_questions_then_plan(team):
-    plan = settle(start(team, "ASKME please")["id"], ("questions",))
-    assert plan["questions"] == "1. Which database?"
-    engine.answer(plan["id"], "SQLite")
-    plan = settle(plan["id"], ("proposed",))
-    second = db.runs(plan["id"])[1]
-    o = out(second)
+def test_phase_without_tasks_gets_planned(team):
+    open(f"{team['cwd']}/NOPLAN", "w").close()
+    goal = settle(start(team)["id"], ("proposed",))
+    engine.approve(goal["id"])
+    goal = settle(goal["id"], ("done",))
+    assert [r for r, _ in roles(goal["id"])] == ["outline", "work", "work", "wrapup", "phase", "work", "wrapup"]
+    phase_run = next(r for r in db.runs(goal["id"]) if r["role"] == "phase")
+    assert "Phase 2 of 2: Phase Two" in out(phase_run)["prompt"]
+
+
+def test_long_goal_stays_in_its_file(team):
+    long = "Step.\n" * 1000
+    goal = settle(start(team, goal=long)["id"], ("proposed",))
+    p = out(db.runs(goal["id"])[0])["prompt"]
+    assert "It's long, so it's in" in p and long not in p
+
+
+def test_questions_then_outline(team):
+    goal = settle(start(team, "ASKME please")["id"], ("questions",))
+    assert goal["questions"] == "1. Which database?"
+    engine.answer(goal["id"], "SQLite")
+    goal = settle(goal["id"], ("proposed",))
+    o = out(db.runs(goal["id"])[1])
     assert "--resume" in o["args"] and o["prompt"].startswith("The user answered:\nSQLite")
 
 
 def test_blocked_task_goes_to_manager_and_back(team):
-    plan = settle(start(team, "BLOCKME")["id"], ("proposed",))
-    engine.approve(plan["id"])
-    plan = settle(plan["id"], ("done",))
-    roles = [(r["role"], r["agent"], r["verdict"]) for r in db.runs(plan["id"])]
-    assert roles[2] == ("work", "codex", "blocked") and roles[3] == ("review", "claude", "revise")
-    assert roles[4][:2] == ("work", "claude")      # the manager reassigned it
-    redo = out(db.runs(plan["id"])[4])
-    assert "Use the env var" in redo["prompt"]
-    notes = [c["text"] for c in db.comments(plan["id"], db.tasks(plan["id"])[1]["id"])]
-    assert "Blocked: missing key" in notes and "Use the env var" in notes
+    goal = settle(start(team, "BLOCKME")["id"], ("proposed",))
+    engine.approve(goal["id"])
+    goal = settle(goal["id"], ("done",))
+    runs = db.runs(goal["id"])
+    assert (runs[2]["role"], runs[2]["agent"], runs[2]["verdict"]) == ("work", "codex", "blocked")
+    assert (runs[3]["role"], runs[3]["verdict"]) == ("review", "revise")
+    assert (runs[4]["role"], runs[4]["agent"]) == ("work", "claude")      # reassigned by the manager
+    assert "Use the env var" in out(runs[4])["prompt"]
 
 
 def test_usage_limit_moves_task_to_other_agent(team):
-    plan = settle(start(team, "LIMITME")["id"], ("proposed",))
-    engine.approve(plan["id"])
-    plan = settle(plan["id"], ("done",))
-    runs = db.runs(plan["id"])
+    goal = settle(start(team, "LIMITME")["id"], ("proposed",))
+    engine.approve(goal["id"])
+    goal = settle(goal["id"], ("done",))
+    runs = db.runs(goal["id"])
     assert (runs[2]["agent"], runs[2]["status"]) == ("codex", "limit")
     assert (runs[3]["role"], runs[3]["agent"], runs[3]["status"]) == ("work", "claude", "done")
     assert "hit its usage limit" in out(runs[3])["prompt"] and usage.blocked_until("codex")
 
 
-def test_manager_switches_when_over_and_worker_ask(team, monkeypatch):
+def test_codex_manager_and_worker_ask(team, monkeypatch):
     monkeypatch.setenv("FAKE_ASK", "1")
     team["use"]["claude"]["five_hour"] = 95       # Claude past the switch point: Codex has more room
-    plan = settle(start(team)["id"], ("proposed",))
-    assert plan["manager"] == "codex"
-    o = out(db.runs(plan["id"])[0])
-    assert 'model_reasoning_effort="low"' in o["args"]
-    engine.approve(plan["id"])
-    plan = settle(plan["id"], ("done",))
-    ask = next(r for r in db.runs(plan["id"]) if r["role"] == "ask")
+    goal = settle(start(team)["id"], ("proposed",))
+    assert goal["manager"] == "codex"
+    assert 'model_reasoning_effort="low"' in out(db.runs(goal["id"])[0])["args"]
+    engine.approve(goal["id"])
+    goal = settle(goal["id"], ("done",))
+    ask = next(r for r in db.runs(goal["id"]) if r["role"] == "ask")
     assert ask["agent"] == "codex" and ask["status"] == "done"
-    task_a = db.tasks(plan["id"])[0]
-    assert any(c["author"] == "codex" for c in db.comments(plan["id"], task_a["id"]))
 
 
-def test_one_plan_runs_per_project(team):
-    ideas.add_milestones(team["project"]["id"], [{"title": "Second"}])
-    second_ms = ideas.get_project(team["project"]["id"])["milestones"][1]
-    a = start(team)
-    b = engine.start_plan(team["project"]["id"], second_ms["id"])
+def test_one_run_per_folder(team):
+    a, b = start(team), start(team, "Another goal.")
     settle(a["id"], ("proposed",))
     settle(b["id"], ("proposed",))
-    starts = sorted((r["started"], r["ended"]) for p in (a, b) for r in db.runs(p["id"]))
-    assert starts[1][0] >= starts[0][1]            # the second planning run started after the first ended
+    spans = sorted((r["started"], r["ended"]) for g in (a, b) for r in db.runs(g["id"]))
+    assert spans[1][0] >= spans[0][1]
 
 
 # ---------- parser / picking ----------
@@ -264,14 +277,14 @@ def test_parse_tokens(tmp_path):
         "input_tokens": 3, "cache_creation_input_tokens": 4, "cache_read_input_tokens": 5, "output_tokens": 6}}))
     assert parse.claude(c)["tokens"] == 13      # cache reads left out
     x = tmp_path / "x.jsonl"
-    x.write_text(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 7, "cached_input_tokens": 4, "output_tokens": 2}}))
+    x.write_text(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 7, "cached_input_tokens": 4,
+                                                                "output_tokens": 2}}))
     assert parse.codex(x)["tokens"] == 5
 
 
 def test_pick(team):
     assert usage.pick("any") == ("claude", "Claude has more room")
     assert usage.pick("any", current="codex")[0] == "codex"
-    assert usage.pick("codex") == ("codex", "")
     usage.block("codex", time.time() + 600)
     agent, why = usage.pick("codex")
     assert agent == "claude" and "out of usage" in why
@@ -281,31 +294,48 @@ def test_pick(team):
 
 # ---------- API ----------
 
-def test_api_rules(team, client, anon):
-    r = client.post("/api/team/plans", json={"project_id": team["project"]["id"],
-                                             "milestone_id": team["milestone"]["id"]})
-    assert r.status_code == 200
-    pid = r.json()["id"]
-    assert client.post("/api/team/plans", json={"project_id": team["project"]["id"],
-                                                "milestone_id": team["milestone"]["id"]}).status_code == 409
-    settle(pid, ("proposed",))
-    detail = client.get(f"/api/team/plans/{pid}").json()
-    assert detail["milestone"]["title"] == "Ship v1" and len(detail["tasks"]) == 2 and detail["tokens"] == 120
-    tid = detail["tasks"][1]["id"]
-    assert client.patch(f"/api/team/tasks/{tid}", json={"position": 1, "assignee": "any"}).status_code == 200
-    assert [t["title"] for t in db.tasks(pid)] == ["Build B", "Build A"] and db.tasks(pid)[0]["assignee"] == "any"
-    overview = client.get("/api/team/overview").json()
-    assert overview["projects"][0]["milestones"][0]["plan"]["id"] == pid
+def test_api(team, client, anon):
+    assert client.post("/api/team/goals", json={"title": "x", "cwd": "/", "goal": "y"}).status_code == 403
+    assert client.post("/api/team/goals", json={"title": "x", "cwd": team["cwd"]}).status_code == 400
+    assert client.post("/api/team/goals", json={"title": "x", "cwd": team["cwd"],
+                                                "runbook": "../../etc/passwd"}).status_code == 400
+    with open(f"{team['cwd']}/RUNBOOK.md", "w") as f:
+        f.write("1. Do it\n")
+    r = client.post("/api/team/goals", json={"title": "Rb", "cwd": team["cwd"], "runbook": "RUNBOOK.md"})
+    assert r.status_code == 200 and r.json()["runbook"] == "RUNBOOK.md"
+    gid = r.json()["id"]
+    settle(gid, ("proposed",))
+    assert "Runbook: RUNBOOK.md (in the folder)" in out(db.runs(gid)[0])["prompt"]
+    detail = client.get(f"/api/team/goals/{gid}").json()
+    assert [p["title"] for p in detail["phases"]] == ["Phase One", "Phase Two"] and len(detail["phases"][0]["tasks"]) == 2
+    second = detail["phases"][1]["id"]
+    assert client.patch(f"/api/team/phases/{second}", json={"position": 1, "done_when": "ok"}).status_code == 200
+    assert [p["title"] for p in db.phases(gid)] == ["Phase Two", "Phase One"]
+    task = detail["phases"][0]["tasks"][1]["id"]
+    assert client.patch(f"/api/team/tasks/{task}", json={"assignee": "any"}).json()["assignee"] == "any"
+    assert client.post(f"/api/team/goals/{gid}/phases", json={"title": "Extra"}).status_code == 200
+    extra = db.phases(gid)[-1]["id"]
+    assert client.delete(f"/api/team/phases/{extra}").json() == {"ok": True}
+    assert client.get("/api/team/overview").json()["goals"][0]["phases_total"] == 2
     assert anon.get("/api/team/overview").status_code == 401
-    # Tool endpoints: only with the token, and only for a running run of that role.
     from fastapi.testclient import TestClient
     from sidus.team import token
     bearer = TestClient(app, headers={"Authorization": f"Bearer {token.get()}"})
     assert bearer.get("/api/team/overview").status_code == 401
-    plan_run = db.runs(pid)[0]["id"]
-    r = bearer.post("/api/team/mcp/propose_tasks", json={"run": plan_run, "agent": "claude",
+    r = bearer.post("/api/team/mcp/propose_tasks", json={"run": db.runs(gid)[0]["id"], "agent": "claude",
                                                          "tasks": [{"title": "x"}]})
     assert r.status_code == 409   # that run has finished
-    assert client.put("/api/team/settings", json={"manager_claude_model": "haiku", "review_each": True}).json()[
-        "review_each"] is True
-    assert client.delete(f"/api/team/plans/{pid}").json() == {"ok": True}
+    assert client.put("/api/team/settings", json={"review_each": True}).json()["review_each"] is True
+    assert client.delete(f"/api/team/goals/{gid}").json() == {"ok": True} and db.get_goal(gid) is None
+
+
+def test_old_plan_tables_are_dropped(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.db"
+    c = sqlite3.connect(path)
+    c.executescript("CREATE TABLE team_plans (id TEXT); CREATE TABLE team_tasks (id TEXT, plan_id TEXT);")
+    c.close()
+    db.open_db(path)
+    cols = [r[1] for r in db.conn().execute("PRAGMA table_info(team_tasks)")]
+    assert "phase_id" in cols and not db.conn().execute(
+        "SELECT name FROM sqlite_master WHERE name = 'team_plans'").fetchone()

@@ -54,10 +54,11 @@ def _step(out: dict, text: str) -> None:
         out["steps"].append(text)
 
 
-TEAM_TOOLS = {"ask_claude": "Asked Claude", "ask_codex": "Asked Codex", "usage": "Checked usage",
-              "comment": "Commented", "propose_tasks": "Proposed the tasks", "approve_task": "Approved the task",
-              "revise_task": "Sent the task back", "create_task": "Added a task",
-              "complete_milestone": "Marked the milestone done"}
+TEAM_TOOLS = {"ask_claude": "Asked Claude", "ask_codex": "Asked Codex", "comment": "Commented",
+              "propose_phases": "Proposed the phases", "propose_tasks": "Planned the tasks",
+              "ask_user": "Asked you questions", "approve_task": "Approved the task",
+              "revise_task": "Sent the task back", "skip_task": "Skipped the task", "create_task": "Added a task",
+              "complete_phase": "Finished the phase", "task_blocked": "Said it's blocked"}
 CLAUDE_FILE_TOOLS = {"Edit": "Edited", "Write": "Wrote", "MultiEdit": "Edited", "NotebookEdit": "Edited"}
 
 
