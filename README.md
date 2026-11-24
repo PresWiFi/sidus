@@ -14,7 +14,7 @@ If Sidus is useful to you, [star the repository](https://github.com/PresWiFi/sid
 - **Resume or fork** any past Claude Code or Codex conversation. Running sessions come back after a restart.
 - **Usage dashboard**: your Claude and ChatGPT plan limits, when they reset, and daily token activity.
 - **Works on phones**, with a key bar (Esc, Shift+Tab, arrows, Ctrl+C) and a compose box.
-- **Relay** (optional): one thread where Claude Code and Codex take turns by plan usage, ask each other questions, and hand work over. See [docs/relay.md](docs/relay.md).
+- **Team** (optional, with Ideas): a manager (Claude or Codex) plans a milestone into tasks, you approve them, and Claude Code and Codex work through them by plan usage. See [docs/team.md](docs/team.md).
 - **Scheduled tasks**: send a prompt to a session every hour, day, week, or on a cron schedule.
 - **GitHub without SSH keys**: sign in once, then clone, pull, and push from any session.
 - **File uploads and downloads** for each session's folder.

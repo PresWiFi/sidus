@@ -1,4 +1,4 @@
-"""Bearer token for Relay's MCP server. It works only for /api/relay/mcp/*; the web UI keeps using the cookie."""
+"""Bearer token for the Team MCP server. It works only for /api/team/mcp/*; the web UI keeps using the cookie."""
 from __future__ import annotations
 
 import hmac
@@ -9,8 +9,8 @@ from fastapi import Request
 
 from ..config import settings
 
-FILE = "relay-token"
-MCP_PREFIX = "/api/relay/mcp/"
+FILE = "team-token"
+MCP_PREFIX = "/api/team/mcp/"
 _cached: str | None = None
 
 

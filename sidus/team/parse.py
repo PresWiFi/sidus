@@ -41,7 +41,7 @@ def _short(text: str, n: int = 160) -> str:
 
 def _result() -> dict:
     return {"session_id": None, "text": "", "steps": [], "files": [], "error": "", "limit": False,
-            "limit_resets": None, "rate_limit": None, "finished": False}
+            "limit_resets": None, "rate_limit": None, "finished": False, "tokens": 0}
 
 
 def _add_file(out: dict, path) -> None:
@@ -54,6 +54,10 @@ def _step(out: dict, text: str) -> None:
         out["steps"].append(text)
 
 
+TEAM_TOOLS = {"ask_claude": "Asked Claude", "ask_codex": "Asked Codex", "usage": "Checked usage",
+              "comment": "Commented", "propose_tasks": "Proposed the tasks", "approve_task": "Approved the task",
+              "revise_task": "Sent the task back", "create_task": "Added a task",
+              "complete_milestone": "Marked the milestone done"}
 CLAUDE_FILE_TOOLS = {"Edit": "Edited", "Write": "Wrote", "MultiEdit": "Edited", "NotebookEdit": "Edited"}
 
 
@@ -66,9 +70,8 @@ def _claude_tool(name: str, inp: dict) -> str:
         return f"Read {inp.get('file_path', '')}"
     if name in ("Grep", "Glob"):
         return f"Searched for {_short(inp.get('pattern', ''), 80)}"
-    if name.startswith("mcp__sidus-relay__"):
-        return {"ask_codex": "Asked Codex", "hand_off": "Handed off to Codex",
-                "usage": "Checked usage"}.get(name.rsplit("__", 1)[1], name)
+    if name.startswith("mcp__sidus-team__"):
+        return TEAM_TOOLS.get(name.rsplit("__", 1)[1], name)
     if name == "TodoWrite":
         return "Updated its to-do list"
     return f"Used {name}"
@@ -97,6 +100,10 @@ def claude(path: str | Path) -> dict:
                 out["limit"], out["limit_resets"] = True, info.get("resetsAt")
         elif t == "result":
             out["finished"] = True
+            u = e.get("usage") or {}
+            # New tokens only: cache reads are cheap against plan limits and would swamp the number.
+            out["tokens"] = sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens",
+                                                              "output_tokens"))
             out["session_id"] = e.get("session_id") or out["session_id"]
             text = e.get("result") or ""
             if e.get("is_error") or (e.get("subtype") and e["subtype"] != "success"):
@@ -123,8 +130,8 @@ def _codex_item(out: dict, item: dict, texts: list[str]) -> None:
             _step(out, f"{'Created' if change.get('kind') == 'add' else 'Edited'} {change.get('path', '')}")
     elif kind == "mcp_tool_call":
         tool = item.get("tool", "")
-        _step(out, {"ask_claude": "Asked Claude", "hand_off": "Handed off to Claude", "usage": "Checked usage"}
-              .get(tool, f"Used {item.get('server', '')}/{tool}"))
+        _step(out, TEAM_TOOLS.get(tool, f"Used {item.get('server', '')}/{tool}") if item.get("server") == "sidus-team"
+              else f"Used {item.get('server', '')}/{tool}")
     elif kind == "web_search":
         _step(out, f"Searched the web for {_short(item.get('query', ''), 80)}")
     elif kind == "error" and item.get("message"):
@@ -141,6 +148,9 @@ def codex(path: str | Path) -> dict:
         elif t == "item.completed":
             _codex_item(out, e.get("item") or {}, texts)
         elif t == "turn.completed":
+            u = e.get("usage") or {}
+            out["tokens"] += (int(u.get("input_tokens") or 0) - int(u.get("cached_input_tokens") or 0)
+                              + int(u.get("output_tokens") or 0))
             # Codex reports errors it recovered from (e.g. a reconnect) as "error" events; a completed turn wins.
             out["finished"], out["error"], out["limit"] = True, "", False
         elif t in ("turn.failed", "error"):
