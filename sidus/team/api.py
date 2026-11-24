@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shutil
+import time
+import uuid
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, StringConstraints
 
 from .. import files
+from ..config import settings
 from . import db, engine, parse, procs, usage
 
 router = APIRouter(prefix="/api/team")
@@ -92,11 +96,84 @@ async def save_settings(body: SettingsIn):
 
 # ---------- goals ----------
 
+# ---------- runbook uploads ----------
+# A runbook is uploaded first (raw request body, streamed to disk), then named by its upload id when the goal is
+# created, which moves it in with the goal.
+
+UPLOAD_ID = re.compile(r"[0-9a-f]{32}")
+
+
+def _uploads() -> Path:
+    d = settings.data_dir / "team" / "uploads"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _clear_old_uploads() -> None:
+    for d in _uploads().iterdir():
+        try:
+            if time.time() - d.stat().st_mtime > 86400:
+                shutil.rmtree(d, ignore_errors=True)
+        except OSError:
+            pass
+
+
+@router.post("/uploads")
+async def upload(request: Request, name: str):
+    try:
+        clean = files.clean_name(name)
+    except files.FileError as e:
+        raise HTTPException(400, str(e))
+    await asyncio.to_thread(_clear_old_uploads)
+    upload_id = uuid.uuid4().hex
+    folder = _uploads() / upload_id
+    folder.mkdir()
+    limit, size = settings.max_upload_mb * 1024 * 1024, 0
+    try:
+        with open(folder / clean, "wb") as f:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > limit:
+                    raise HTTPException(413, f"File is larger than {settings.max_upload_mb} MB (SIDUS_MAX_UPLOAD_MB)")
+                await asyncio.to_thread(f.write, chunk)
+    except BaseException:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    if not size:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise HTTPException(400, "The file is empty")
+    return {"upload": upload_id, "name": clean, "size": size}
+
+
+def _uploaded(upload_id: str) -> Path:
+    if not UPLOAD_ID.fullmatch(upload_id):
+        raise HTTPException(400, "Bad upload id")
+    found = list((_uploads() / upload_id).glob("*")) if (_uploads() / upload_id).is_dir() else []
+    if len(found) != 1:
+        raise HTTPException(400, "Upload not found; upload the runbook again")
+    return found[0]
+
+
+@router.get("/goals/{goal_id}/runbook")
+async def runbook(goal_id: str):
+    goal = _goal(goal_id)
+    if not goal["runbook"]:
+        raise HTTPException(404, "This goal has no runbook")
+    path = goal["runbook"] if os.path.isabs(goal["runbook"]) else os.path.join(goal["cwd"], goal["runbook"])
+    if not os.path.isfile(path):
+        raise HTTPException(404, "The runbook file is gone")
+    resp = FileResponse(path, filename=Path(path).name, content_disposition_type="inline")
+    resp.headers["Content-Security-Policy"] = "sandbox"  # never run an uploaded HTML/JS file in Sidus's origin
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
+
+
 class GoalIn(BaseModel):
     title: _text(120, required=True)
     cwd: _text(1024, required=True)
     goal: _text(MAX_GOAL) = ""
     runbook: _text(1024) = ""        # a file in the folder, relative or absolute
+    runbook_upload: _text(64) = ""   # or an uploaded runbook (id from POST /uploads)
 
 
 @router.post("/goals")
@@ -112,10 +189,16 @@ async def create_goal(body: GoalIn):
         if not (path == cwd or path.startswith(cwd + os.sep)) or not os.path.isfile(path):
             raise HTTPException(400, f"Runbook not found in the folder: {body.runbook}")
         runbook = os.path.relpath(path, cwd)
-    if not body.goal and not runbook:
-        raise HTTPException(400, "Describe the goal or point to a runbook")
-    goal = body.goal or f"Carry out the runbook {runbook}."
-    return _detail(await asyncio.to_thread(engine.start_goal, body.title, cwd, goal, runbook))
+    uploaded = _uploaded(body.runbook_upload) if body.runbook_upload else None
+    if runbook and uploaded:
+        raise HTTPException(400, "Give one runbook: a file in the folder or an upload")
+    if not body.goal and not runbook and not uploaded:
+        raise HTTPException(400, "Describe the goal or give a runbook")
+    goal = body.goal or f"Carry out the runbook {runbook or uploaded.name}."
+    detail = _detail(await asyncio.to_thread(engine.start_goal, body.title, cwd, goal, runbook, uploaded))
+    if uploaded:
+        shutil.rmtree(uploaded.parent, ignore_errors=True)
+    return detail
 
 
 @router.get("/goals/{goal_id}")

@@ -104,7 +104,8 @@
       <div class="picker"><div class="picker-path"><button type="button" class="btn small ghost" id="tp-up" aria-label="Up one folder">↑</button><span id="tp-path"></span></div>
         <div class="picker-list" id="tp-list"></div></div>
       <label>Goal or runbook <textarea name="goal" rows="8" placeholder="Describe what you want done, or paste a runbook. Long is fine."></textarea></label>
-      <label>Or a runbook file in the folder <input name="runbook" placeholder="e.g. docs/runbook.md (optional)"></label>
+      <label>Upload a runbook <input type="file" name="upload" id="t-upload"></label>
+      <label>Or a runbook file already in the folder <input name="runbook" placeholder="e.g. docs/runbook.md (optional)"></label>
       <p class="error" id="t-err"></p>
       <div class="dialog-actions"><button type="button" class="btn" id="t-cancel">Cancel</button><button class="btn primary" id="t-go">Start planning</button></div></form>`;
     dlg.showModal();
@@ -124,13 +125,24 @@
       e.preventDefault();
       const f = new FormData(e.target);
       if (!cwd) { $("#t-err").textContent = "Pick a folder."; return; }
-      if (!f.get("goal").trim() && !f.get("runbook").trim()) { $("#t-err").textContent = "Describe the goal or give a runbook file."; return; }
+      const file = $("#t-upload").files[0];
+      if (!f.get("goal").trim() && !f.get("runbook").trim() && !file) { $("#t-err").textContent = "Describe the goal or give a runbook."; return; }
+      if (file && f.get("runbook").trim()) { $("#t-err").textContent = "Give one runbook: an upload or a file in the folder."; return; }
       $("#t-go").disabled = true;
       try {
-        const g = await api(`${BASE}/goals`, { method: "POST", body: { title: f.get("title"), cwd, goal: f.get("goal"), runbook: f.get("runbook") } });
+        let upload = "";
+        if (file) {
+          $("#t-go").textContent = "Uploading…";
+          const res = await fetch(`${BASE}/uploads?name=${encodeURIComponent(file.name)}`, {
+            method: "POST", body: file, credentials: "same-origin", headers: { "X-Sidus": "1" } });
+          const data = await res.json().catch(() => null);
+          if (!res.ok) throw new Error(data?.detail || `Upload failed (HTTP ${res.status})`);
+          upload = data.upload;
+        }
+        const g = await api(`${BASE}/goals`, { method: "POST", body: { title: f.get("title"), cwd, goal: f.get("goal"), runbook: f.get("runbook"), runbook_upload: upload } });
         dlg.close();
         location.hash = `#/team/g/${g.id}`;
-      } catch (err) { $("#t-err").textContent = err.message; $("#t-go").disabled = false; }
+      } catch (err) { $("#t-err").textContent = err.message; $("#t-go").disabled = false; $("#t-go").textContent = "Start planning"; }
     });
     browse("");
   }
@@ -230,7 +242,7 @@
       $("#team").innerHTML = `<div class="t-head"><div>
           <a class="t-back" href="#/team">← Team</a>
           <h1>${esc(g.title)}</h1>
-          <div class="muted t-small">${esc(g.cwd)}${g.runbook ? ` · runbook <code>${esc(g.runbook)}</code>` : ""}</div>
+          <div class="muted t-small">${esc(g.cwd)}${g.runbook ? ` · <a href="${BASE}/goals/${g.id}/runbook" target="_blank" rel="noopener">Runbook: ${esc(g.runbook.split("/").pop())}</a>` : ""}</div>
           <div class="t-meta">${badge(GOAL_STATUS, g.status)}${g.manager ? `<span class="t-small">Manager</span>${agent(g.manager)}` : ""}${g.phases_total ? `<span class="muted t-small">${g.phases_done}/${g.phases_total} phases</span>` : ""}${tokens(g.tokens)}</div></div>
         <div class="t-head-actions">${actions}${end}</div></div>
         ${g.waiting ? `<p class="badge warn t-waiting">${esc(g.waiting)}</p>` : ""}

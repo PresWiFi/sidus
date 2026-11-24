@@ -59,7 +59,8 @@ def _goal_text(goal: dict, short: bool = False) -> str:
     else:
         lines.append(f"It's long, so it's in {goal_file(goal)}: read it.")
     if goal["runbook"] and not short:
-        lines.append(f"Runbook: {goal['runbook']} (in the folder). Follow it.")
+        where = "" if os.path.isabs(goal["runbook"]) else " (in the folder)"
+        lines.append(f"Runbook: {goal['runbook']}{where}. Follow it.")
     return "\n".join(lines)
 
 
@@ -206,9 +207,14 @@ _lock = threading.RLock()
 _stopping: set[str] = set()
 
 
-def start_goal(title: str, cwd: str, goal: str, runbook: str | None = None) -> dict:
+def start_goal(title: str, cwd: str, goal: str, runbook: str | None = None, runbook_file: Path | None = None) -> dict:
+    """runbook is a file in the folder (relative path); runbook_file an uploaded file, moved in with the goal."""
     g = db.create_goal(title, cwd, goal, runbook)
     goal_file(g).write_text(goal + "\n")
+    if runbook_file:
+        target = procs.log_dir(g["id"]) / runbook_file.name
+        runbook_file.replace(target)
+        db.set_runbook(g["id"], str(target))
     kick(g["id"])
     return db.get_goal(g["id"])
 

@@ -339,3 +339,32 @@ def test_old_plan_tables_are_dropped(tmp_path):
     cols = [r[1] for r in db.conn().execute("PRAGMA table_info(team_tasks)")]
     assert "phase_id" in cols and not db.conn().execute(
         "SELECT name FROM sqlite_master WHERE name = 'team_plans'").fetchone()
+
+
+def test_uploaded_runbook(team, client, monkeypatch):
+    r = client.post("/api/team/uploads?name=../Run book.md", content=b"1. Install\n2. Migrate\n")
+    assert r.status_code == 200 and r.json()["name"] == "Run book.md"
+    upload = r.json()["upload"]
+    assert client.post("/api/team/goals", json={"title": "x", "cwd": team["cwd"], "runbook": "a.md",
+                                                "runbook_upload": upload}).status_code == 400
+    r = client.post("/api/team/goals", json={"title": "Up", "cwd": team["cwd"], "runbook_upload": upload})
+    assert r.status_code == 200
+    gid = r.json()["id"]
+    goal = db.get_goal(gid)
+    assert goal["runbook"] == str(procs.log_dir(gid) / "Run book.md") and goal["goal"] == \
+        "Carry out the runbook Run book.md."
+    assert not (settings.data_dir / "team" / "uploads" / upload).exists()     # moved in with the goal
+    settle(gid, ("proposed",))
+    prompt = out(db.runs(gid)[0])["prompt"]
+    assert f"Runbook: {goal['runbook']}. Follow it." in prompt and "(in the folder)" not in prompt
+    got = client.get(f"/api/team/goals/{gid}/runbook")
+    assert got.text == "1. Install\n2. Migrate\n" and got.headers["content-security-policy"] == "sandbox"
+    # Can't reuse an upload, bad ids, empty files, too-large files.
+    assert client.post("/api/team/goals", json={"title": "x", "cwd": team["cwd"],
+                                                "runbook_upload": upload}).status_code == 400
+    assert client.post("/api/team/goals", json={"title": "x", "cwd": team["cwd"],
+                                                "runbook_upload": "../../etc"}).status_code == 400
+    assert client.post("/api/team/uploads?name=e.md", content=b"").status_code == 400
+    monkeypatch.setattr(settings, "max_upload_mb", 0)
+    assert client.post("/api/team/uploads?name=big.md", content=b"x").status_code == 413
+    assert list((settings.data_dir / "team" / "uploads").iterdir()) == []

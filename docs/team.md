@@ -20,12 +20,14 @@ On first start Sidus creates these in its data folder:
 |---|---|
 | `team.db` | Goals, phases, tasks, runs and notes (SQLite) |
 | `team-token` | The token the agents' Team tools use to reach Sidus. Readable only by you. It works for `/api/team/mcp/*` and nothing else |
-| `team/<goal>/` | `goal.md` (the goal as you gave it) and each run's raw output |
+| `team/<goal>/` | `goal.md` (the goal as you gave it), an uploaded runbook, and each run's raw output |
+| `team/uploads/` | Runbooks uploaded for a goal that wasn't created; cleared after a day |
 
 ## How a goal goes
 
-1. **Start.** On the Team page, click **New goal**. Pick a folder, then describe the goal, paste a runbook, or name
-   a runbook file in the folder (e.g. `docs/runbook.md`). Long is fine.
+1. **Start.** On the Team page, click **New goal**. Pick a folder, then describe the goal or paste a runbook, and/or
+   give a runbook file: upload one, or name one that's already in the folder (e.g. `docs/runbook.md`). Long is fine.
+   An uploaded runbook is kept with the goal in Sidus's data folder, not in your repo; open it from the goal page.
 2. **Questions.** If something unclear would change the plan, the manager asks you up to 3 short questions and
    waits for your answers.
 3. **Approve.** The manager proposes 1-8 phases, each with a "done when", plus the tasks for phase 1. Edit,
