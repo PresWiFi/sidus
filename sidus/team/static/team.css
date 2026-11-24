@@ -1,0 +1,83 @@
+/* Sidus Team. Uses Sidus's own variables and components (card, badge, btn, bar, group-label). */
+
+.team h1 { word-break: break-word; margin: 0 0 6px; }
+.t-intro { line-height: 1.5; margin: 0 0 14px; max-width: 75ch; }
+.t-small { font-size: 12.5px; }
+.team .badge.warn { background: color-mix(in srgb, var(--warning) 18%, var(--surface)); color: var(--text); border-color: var(--warning); }
+.team .badge.bad { background: color-mix(in srgb, var(--critical) 12%, var(--surface)); color: var(--critical-ink); border-color: var(--critical); }
+.team .badge.accent { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.team .badge.good { background: color-mix(in srgb, var(--good) 12%, var(--surface)); color: var(--good-ink); border-color: var(--good); }
+.t-agent { display: inline-flex; align-items: center; font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 99px; color: #fff; }
+.t-agent.t-claude { background: #c96442; }
+.t-agent.t-codex { background: #10a37f; }
+.t-tok { font-size: 12px; font-variant-numeric: tabular-nums; }
+
+.t-usage { margin-bottom: 16px; }
+.t-usage h2 { margin: 0 0 10px; }
+.t-use { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; padding: 5px 0; }
+.t-use > b { width: 56px; }
+.t-meter { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.t-meter .bar { width: 90px; }
+.t-meter .bar > i.over { background: var(--serious); }
+.t-settings { margin-top: 8px; font-size: 13px; }
+.t-settings summary { cursor: pointer; color: var(--text-2); }
+.t-settings form { display: grid; gap: 8px; margin-top: 8px; }
+.t-settings input[type=number] { width: 64px; }
+.t-settings select { width: auto; }
+
+.t-project { margin-bottom: 10px; }
+.t-project-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin-bottom: 6px; }
+.t-ms { display: flex; justify-content: space-between; gap: 8px 12px; align-items: center; flex-wrap: wrap; padding: 8px 0; border-top: 1px solid var(--border); }
+.t-ms > div:first-child { flex: 1 1 220px; min-width: 0; }
+.t-ms-act { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+.t-plans { display: grid; gap: 6px; }
+.t-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 9px 12px; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--surface); text-decoration: none; }
+.t-row:hover { border-color: var(--accent); }
+.t-row > span:first-child { font-weight: 600; margin-right: auto; }
+
+.t-form { display: grid; gap: 10px; min-width: min(520px, 90vw); }
+.t-form label { display: grid; gap: 4px; font-size: 13px; }
+.t-form textarea, .t-questions textarea, .t-note textarea { width: 100%; font: 14px/1.5 var(--sans); }
+
+.t-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 12px; }
+.t-back { font-size: 13px; text-decoration: none; }
+.t-head h1 { margin: 4px 0 2px; font-size: 22px; }
+.t-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.t-head-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.t-waiting { display: inline-flex; white-space: normal; margin: 0 0 12px; padding: 4px 10px; font-size: 13px; }
+.t-questions { margin-bottom: 14px; border-color: var(--warning); }
+.t-questions form, .t-note { display: grid; gap: 8px; margin-top: 10px; }
+.t-note { grid-template-columns: 1fr auto; align-items: end; }
+
+.t-task { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); margin-bottom: 8px; }
+.t-task > summary { display: flex; gap: 8px; align-items: center; padding: 10px 12px; cursor: pointer; list-style: none; }
+.t-task > summary::-webkit-details-marker { display: none; }
+.t-task.working, .t-task.review { border-color: var(--accent); }
+.t-task.failed { border-color: var(--critical); }
+.t-task.done .t-task-title, .t-task.skipped .t-task-title { color: var(--text-3); }
+.t-task-title { font-weight: 600; margin-right: auto; overflow: hidden; text-overflow: ellipsis; }
+.t-task-body { padding: 0 12px 10px 40px; }
+.t-num { display: inline-grid; place-items: center; min-width: 22px; height: 22px; border-radius: 99px; background: var(--surface-2); font-size: 12px; font-weight: 600; }
+.t-task.edit { padding: 10px 12px; display: grid; gap: 6px; }
+.t-task-head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.t-task-head .t-title { flex: 1 1 160px; min-width: 0; font-weight: 600; }
+.t-task-head select { width: auto; }
+.t-task.edit { min-width: 0; }
+.t-task.edit textarea, .t-task.edit input { width: 100%; box-sizing: border-box; font: 13.5px/1.5 var(--sans); }
+.t-task.edit .t-task-head input { width: auto; }
+.t-done-when { display: grid; gap: 3px; font-size: 12.5px; color: var(--text-2); }
+.t-row-btns { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+
+.t-run { border-left: 3px solid var(--border); padding: 4px 10px; margin: 6px 0; font-size: 13px; }
+.t-run[open] { border-left-color: var(--accent); }
+.t-run summary { cursor: pointer; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.t-steps { margin: 6px 0; padding-left: 18px; color: var(--text-2); font: 12.5px/1.6 var(--mono); }
+.t-comment { padding: 6px 10px; margin: 6px 0; border-radius: 8px; background: var(--surface-2); }
+.t-comment.t-by-you { background: var(--accent-soft); }
+.t-md { line-height: 1.55; word-break: break-word; }
+.t-md > :first-child { margin-top: 0; }
+.t-md > :last-child { margin-bottom: 0; }
+.t-md pre { background: var(--surface-2); padding: 8px 10px; border-radius: 8px; overflow-x: auto; }
+.t-md code { background: var(--surface-2); padding: 1px 4px; border-radius: 4px; }
+.t-md pre code { background: none; padding: 0; }

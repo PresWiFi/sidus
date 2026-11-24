@@ -15,7 +15,7 @@ os.environ.update({
     "SIDUS_PASSWORD": "test-password",
     "SIDUS_WORKSPACES": str(WORKSPACE),
     "SIDUS_TMUX_SOCKET": str(_TMP / "tmux.sock"),
-    "SIDUS_PLUGINS": "ideas,relay",
+    "SIDUS_PLUGINS": "ideas,team",
 })
 
 import pytest  # noqa: E402
