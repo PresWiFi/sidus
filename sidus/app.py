@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -726,9 +727,15 @@ async def term(ws: WebSocket, name: str, cols: int = 120, rows: int = 32):
 
 # ---------- static ----------
 
+_STATIC_REF = re.compile(r'((?:src|href)="/static/[^"?]+)(?:\?v=[^"]*)?"')
+
+
 @app.get("/")
 async def root():
-    return FileResponse(STATIC / "index.html")
+    # Every /static/ file gets ?v=<version>, so an update reaches browsers even when a proxy (e.g. Cloudflare's
+    # Browser Cache TTL) tells them to keep scripts for hours.
+    html = (STATIC / "index.html").read_text()
+    return HTMLResponse(_STATIC_REF.sub(lambda m: f'{m.group(1)}?v={__version__}"', html))
 
 
 @app.get("/manifest.webmanifest")

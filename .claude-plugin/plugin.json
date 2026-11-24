@@ -1,6 +1,6 @@
 {
   "name": "sidus",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Find, search, and resume past Claude Code and Codex sessions, and set up Sidus, the self-hosted web UI for coding agents.",
   "author": { "name": "PresWiFi", "url": "https://github.com/PresWiFi" },
   "homepage": "https://github.com/PresWiFi/sidus",

@@ -53,9 +53,10 @@ def test_token_is_stable_and_long():
 
 
 def test_me_lists_plugin(client):
+    from sidus import __version__
     assert client.get("/api/me").json()["plugins"][0] == {
         "name": "ideas", "nav": {"label": "Ideas", "href": "#/ideas"},
-        "script": "/api/ideas/ui.js", "style": "/api/ideas/ui.css"}
+        "script": f"/api/ideas/ui.js?v={__version__}", "style": f"/api/ideas/ui.css?v={__version__}"}
 
 
 def test_ui_files_need_sign_in(anon, client):

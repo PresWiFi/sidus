@@ -219,3 +219,11 @@ def test_reset_password_command():
                          capture_output=True, text=True, env=env, check=True).stdout
     password = out.split("Password: ")[1].split()[0]
     assert auth.check_login("owner2", password)
+
+
+def test_page_stamps_static_files_with_version(anon):
+    """Updates reach browsers even when a proxy tells them to keep scripts for hours."""
+    from sidus import __version__
+    html = anon.get("/").text
+    assert f'src="/static/app.js?v={__version__}"' in html and f'href="/static/app.css?v={__version__}"' in html
+    assert f'src="/static/vendor/xterm.js?v={__version__}"' in html and "?v=12" not in html
