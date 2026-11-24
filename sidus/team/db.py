@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS team_goals (
     title TEXT NOT NULL,
     cwd TEXT NOT NULL,
     goal TEXT NOT NULL,                 -- what you asked for (also saved as goal.md next to the run logs)
-    runbook TEXT,                       -- a runbook file in the folder, if you pointed at one
+    runbook TEXT,                       -- a runbook: a path in the folder, or an uploaded file (absolute path)
     status TEXT NOT NULL DEFAULT 'planning',
     manager TEXT,                       -- who manages: claude or codex
     claude_session TEXT,                -- the manager's conversation, per agent
@@ -189,6 +189,12 @@ def create_goal(title: str, cwd: str, goal: str, runbook: str | None = None) -> 
                        "VALUES (?, ?, ?, ?, ?, ?, ?)", (gid, title, cwd, goal, runbook, now, now))
         conn().commit()
     return get_goal(gid)
+
+
+def set_runbook(goal_id: str, path: str) -> None:
+    with _lock:
+        conn().execute("UPDATE team_goals SET runbook = ? WHERE id = ?", (path, goal_id))
+        conn().commit()
 
 
 def get_goal(goal_id: str) -> dict | None:
