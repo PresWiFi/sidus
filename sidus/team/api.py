@@ -3,6 +3,7 @@ uses the bearer token, which only works for /api/team/mcp/*."""
 from __future__ import annotations
 
 import asyncio
+import mimetypes
 import os
 import re
 import shutil
@@ -162,10 +163,38 @@ async def runbook(goal_id: str):
     path = goal["runbook"] if os.path.isabs(goal["runbook"]) else os.path.join(goal["cwd"], goal["runbook"])
     if not os.path.isfile(path):
         raise HTTPException(404, "The runbook file is gone")
-    resp = FileResponse(path, filename=Path(path).name, content_disposition_type="inline")
-    resp.headers["Content-Security-Policy"] = "sandbox"  # never run an uploaded HTML/JS file in Sidus's origin
+    return _inline(path)
+
+
+_TEXT_TYPES = {"application/json", "application/xml", "application/x-yaml", "application/yaml", "application/toml",
+               "application/x-sh", "application/javascript", "application/x-python-code"}
+
+
+def _inline(path: str) -> FileResponse:
+    """Show a file in the browser. Text of any kind (markdown, logs, code, no extension) goes out as text/plain so the
+    browser displays it instead of downloading it."""
+    kind, _ = mimetypes.guess_type(path)
+    if kind is None or kind in _TEXT_TYPES or (kind.startswith("text/") and kind != "text/html"):
+        kind = "text/plain; charset=utf-8"
+    resp = FileResponse(path, media_type=kind, filename=Path(path).name, content_disposition_type="inline")
+    resp.headers["Content-Security-Policy"] = "sandbox"  # never run an agent's or uploaded HTML/JS in Sidus's origin
     resp.headers["X-Content-Type-Options"] = "nosniff"
     return resp
+
+
+@router.get("/goals/{goal_id}/file")
+async def goal_file(goal_id: str, path: str):
+    """A file an agent linked to in its report: absolute, or relative to the goal's folder. Allowed inside the
+    configured workspaces and inside the goal's own Team folder (goal.md, STATUS.md, the runbook)."""
+    goal = _goal(goal_id)
+    path = os.path.expanduser(path.strip())
+    real = os.path.realpath(path if os.path.isabs(path) else os.path.join(goal["cwd"], path))
+    own = os.path.realpath(settings.data_dir / "team" / goal_id)
+    if not (files.inside_workspace(real) or real == own or real.startswith(own + os.sep)):
+        raise HTTPException(403, "Outside the configured workspaces (SIDUS_WORKSPACES)")
+    if not os.path.isfile(real):
+        raise HTTPException(404, f"File not found: {real}")
+    return _inline(real)
 
 
 class GoalIn(BaseModel):

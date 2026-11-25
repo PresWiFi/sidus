@@ -14,7 +14,30 @@
       "input", "button", "textarea", "select", "style", "link", "meta"],
     FORBID_ATTR: ["style", "srcset"],
   };
-  const md = (text) => DOMPurify.sanitize(marked.parse(text || "", { gfm: true, breaks: true }), PURIFY);
+  // Agents link to files by path (/root/x/report.md, docs/a.md:12, file:///…). Point those at the goal's file route;
+  // left alone, the browser asks Sidus for /root/x/report.md and gets a 404.
+  let fileGoal = null;
+  const fileUrl = (path) => `${BASE}/goals/${fileGoal}/file?path=${encodeURIComponent(path)}`;
+  const localPath = (href) => {
+    if (/^file:\/\//i.test(href)) href = href.slice(7);
+    else if (/^([a-z][a-z0-9+.-]*:|\/\/|#)/i.test(href)) return null;
+    href = href.replace(/#.*$/, "").replace(/:\d+(:\d+)?$/, "");
+    try { href = decodeURIComponent(href); } catch { /* keep as written */ }
+    return href || null;
+  };
+  const md = (text) => {
+    const tpl = document.createElement("template");
+    tpl.innerHTML = DOMPurify.sanitize(marked.parse(text || "", { gfm: true, breaks: true }), PURIFY);
+    if (fileGoal) for (const a of tpl.content.querySelectorAll("a[href]")) {
+      const path = localPath(a.getAttribute("href"));
+      if (!path) continue;
+      a.setAttribute("href", fileUrl(path));
+      a.setAttribute("target", "_blank");
+      a.setAttribute("rel", "noopener");
+    }
+    return tpl.innerHTML;
+  };
+  const fileLink = (path) => `<a href="${esc(fileUrl(path))}" target="_blank" rel="noopener">${esc(path)}</a>`;
   const agent = (a) => (a && a !== "any" ? `<span class="t-agent t-${a}">${LABEL[a]}</span>` : `<span class="badge">Either</span>`);
   const tokens = (n) => (n ? `<span class="muted t-tok" title="New (uncached) input plus output tokens, as the agents reported them">${fmt.tokens(n)} tokens</span>` : "");
   const isEditing = () => {
@@ -193,7 +216,7 @@
     return `<details class="t-task ${t.status}" ${["working", "review", "failed"].includes(t.status) ? "open" : ""}>
       <summary><span class="t-num">${i}</span><span class="t-task-title">${esc(t.title)}</span>${badge(TASK_STATUS, t.status)}${agent(t.worker || t.assignee)}</summary>
       <div class="t-task-body">${t.details ? `<div class="t-md">${md(t.details)}</div>` : ""}${t.done_when ? `<p class="t-small"><b>Done when:</b> ${esc(t.done_when)}</p>` : ""}
-        ${t.files.length ? `<p class="t-small muted">Files: ${t.files.map(esc).join(", ")}</p>` : ""}
+        ${t.files.length ? `<p class="t-small muted">Files: ${t.files.map(fileLink).join(", ")}</p>` : ""}
         ${runs.map(runHtml).join("")}${comments.map(commentHtml).join("")}
         <div class="t-row-btns">${actions}</div></div></details>`;
   }
@@ -229,6 +252,7 @@
     }
 
     function render(g) {
+      fileGoal = g.id;
       const actions = {
         planning: `<button class="btn" data-a="stop">Stop</button>`,
         questions: "", proposed: `<button class="btn ghost" data-a="replan">Re-plan</button><button class="btn primary" data-a="approve">Approve and start</button>`,

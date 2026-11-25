@@ -5,6 +5,7 @@ import socket
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 import threading
 import time
 
@@ -368,3 +369,29 @@ def test_uploaded_runbook(team, client, monkeypatch):
     monkeypatch.setattr(settings, "max_upload_mb", 0)
     assert client.post("/api/team/uploads?name=big.md", content=b"x").status_code == 413
     assert list((settings.data_dir / "team" / "uploads").iterdir()) == []
+
+
+def test_goal_file(team, client, anon, tmp_path):
+    """Files agents link to in their reports open in the browser (they used to 404 at /root/...)."""
+    gid = start(team)["id"]
+    settle(gid, ("proposed",))
+    Path(team["cwd"], "docs").mkdir()
+    Path(team["cwd"], "docs", "report.md").write_text("# Report\n")
+    absolute = str(Path(team["cwd"], "docs", "report.md"))
+    for path in (absolute, "docs/report.md"):
+        got = client.get(f"/api/team/goals/{gid}/file", params={"path": path})
+        assert got.status_code == 200 and got.text == "# Report\n"
+        assert got.headers["content-type"] == "text/plain; charset=utf-8"
+        assert got.headers["content-security-policy"] == "sandbox"
+        assert got.headers["content-disposition"].startswith("inline")
+    # The goal's own Team folder (goal.md, STATUS.md) is allowed; other places are not.
+    procs.log_dir(gid).mkdir(parents=True, exist_ok=True)
+    (procs.log_dir(gid) / "STATUS.md").write_text("ok")
+    assert client.get(f"/api/team/goals/{gid}/file", params={"path": str(procs.log_dir(gid) / "STATUS.md")}).text == "ok"
+    outside = tmp_path / "secret.txt"
+    outside.write_text("no")
+    for path in (str(outside), "../../../../etc/passwd", str(settings.data_dir / "team.db")):
+        assert client.get(f"/api/team/goals/{gid}/file", params={"path": path}).status_code == 403
+    assert client.get(f"/api/team/goals/{gid}/file", params={"path": "docs/missing.md"}).status_code == 404
+    assert client.get("/api/team/goals/nope/file", params={"path": absolute}).status_code == 404
+    assert anon.get(f"/api/team/goals/{gid}/file", params={"path": absolute}).status_code == 401
