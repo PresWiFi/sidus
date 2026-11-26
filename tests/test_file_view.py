@@ -34,3 +34,18 @@ def test_view_types_and_sandbox(client, anon, workspace, tmp_path):
     assert client.get("/api/files/view", params={"path": str(outside)}).status_code == 403
     assert client.get("/api/files/view", params={"path": str(d / "missing.md")}).status_code == 404
     assert anon.get("/api/files/view", params={"path": str(d / "r.md")}).status_code == 401
+
+
+def test_bare_path_links_redirect_to_viewer(client, anon):
+    from sidus.config import settings
+    r = anon.get("/root/claude/context/flip-phone-mfa-setup.md", follow_redirects=False)
+    assert r.status_code == 302
+    assert r.headers["location"] == "/#/view?path=%2Froot%2Fclaude%2Fcontext%2Fflip-phone-mfa-setup.md"
+    goal_file = f"{settings.data_dir}/team/46660d2e612d/STATUS.md"
+    r = client.get(goal_file, follow_redirects=False)
+    assert r.status_code == 302 and "goal=46660d2e612d" in r.headers["location"]
+    # Real 404s stay JSON: API paths, folders, unknown routes without an extension.
+    assert client.get("/api/team/goals/nope").status_code == 404
+    assert client.get("/api/nope.json").json() == {"detail": "Not Found"}
+    assert client.get("/root/claude/").status_code == 404
+    assert client.get("/nothing").status_code == 404

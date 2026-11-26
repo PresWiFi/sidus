@@ -163,7 +163,7 @@
   function runHtml(r) {
     const status = r.status === "running" ? `<span class="badge accent">Running</span>` : ["done", "retried"].includes(r.status) ? "" : `<span class="badge ${r.status === "failed" ? "bad" : "warn"}">${esc(r.status === "limit" ? "Hit usage limit" : r.status)}</span>`;
     return `<details class="t-run" ${r.status === "running" ? "open" : ""}><summary>${agent(r.agent)} <span>${ROLE[r.role] || r.role}</span>${status}${r.reason ? `<span class="muted t-small">${esc(r.reason)}</span>` : ""}${tokens(r.tokens)}</summary>
-      ${r.steps.length ? `<ul class="t-steps">${r.steps.slice(-40).map((s) => `<li>${esc(s)}</li>`).join("")}</ul>` : ""}
+      ${r.steps.length ? `<ul class="t-steps">${r.steps.slice(-40).map((s) => `<li>${H.fileLinks(esc(s), { base: fileBase, goal: fileGoal })}</li>`).join("")}</ul>` : ""}
       ${r.result ? `<div class="t-md">${md(r.result)}</div>` : ""}${r.error ? `<p class="error">${esc(r.error)}</p>` : ""}
       ${r.session_id ? `<a class="t-small" href="#/s/${esc(r.session_id)}">Open session</a>` : ""}</details>`;
   }
