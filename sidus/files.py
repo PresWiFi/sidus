@@ -1,6 +1,7 @@
 """Browse, upload, and download files inside the configured workspaces."""
 from __future__ import annotations
 
+import mimetypes
 import os
 import re
 import uuid
@@ -115,3 +116,32 @@ class Upload:
             os.unlink(self.tmp)
         except OSError:
             pass
+
+
+# ---------- showing a file in the browser (the file viewer, agent links) ----------
+
+_TEXT_TYPES = {"application/json", "application/xml", "application/x-yaml", "application/yaml", "application/toml",
+               "application/x-sh", "application/javascript", "application/x-python-code", "application/sql"}
+_HTML = {"text/html", "application/xhtml+xml", "image/svg+xml"}
+_NATIVE = ("image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp", "application/pdf")
+# A page an agent wrote may run its scripts, but in an opaque origin: no Sidus cookies, no same-origin API calls.
+SCRIPTS_CSP = "sandbox allow-scripts allow-popups allow-forms allow-modals allow-downloads"
+
+
+def inline_response(path: str, scripts: bool = False, download: bool = False):
+    """Text of any kind goes out as text/plain so the browser shows it. HTML and SVG stay sandboxed (scripts only
+    when asked, and never with Sidus's origin); images and PDFs keep their type so the browser can render them."""
+    from fastapi.responses import FileResponse
+    kind, _ = mimetypes.guess_type(path)
+    if kind is None or kind in _TEXT_TYPES or (kind.startswith("text/") and kind != "text/html"):
+        kind = "text/plain; charset=utf-8"
+    resp = FileResponse(path, media_type=kind, filename=Path(path).name,
+                        content_disposition_type="attachment" if download else "inline")
+    if kind in _HTML:
+        resp.headers["Content-Security-Policy"] = SCRIPTS_CSP if scripts else "sandbox"
+    elif not kind.startswith(_NATIVE):
+        resp.headers["Content-Security-Policy"] = "sandbox"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "SAMEORIGIN"   # the file viewer frames HTML pages and PDFs
+    resp.headers["Cache-Control"] = "no-store"   # agents rewrite files; always show the current one
+    return resp

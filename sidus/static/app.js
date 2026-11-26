@@ -503,6 +503,7 @@ function route() {
   if (plugin) state.view = plugin.view(h.match(plugin.pattern));
   else if ((m = h.match(/^#\/s\/([\w-]+)/))) state.view = sessionView({ id: m[1] });
   else if ((m = h.match(/^#\/t\/([\w-]+)/))) state.view = sessionView({ tmuxName: m[1] });
+  else if (h.startsWith("#/view?")) state.view = viewerView(new URLSearchParams(h.slice(7)));
   else if (h === "#/settings") state.view = settingsView();
   else if (h === "#/scheduled") state.view = schedulesView();
   else if (h === "#/welcome") state.view = welcomeView();
@@ -1434,7 +1435,7 @@ function sessionView({ id, tmuxName }) {
     lastTranscriptKey = key;
     const sc = $("#tr-scroll");
     const atBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 80 || !el.dataset.done;
-    el.innerHTML = renderTranscript(data.items, agentName(s)) || `<p class="muted">No messages yet.</p>`;
+    el.innerHTML = renderTranscript(data.items, agentName(s), s.cwd || s.tmux?.cwd || "") || `<p class="muted">No messages yet.</p>`;
     el.dataset.done = "1";
     if (atBottom) sc.scrollTop = sc.scrollHeight;
   }
@@ -1459,8 +1460,8 @@ function sessionView({ id, tmuxName }) {
   };
 }
 
-function renderTranscript(items, who = "Claude") {
-  const md = (t) => DOMPurify.sanitize(marked.parse(t, { breaks: false, gfm: true }));
+function renderTranscript(items, who = "Claude", cwd = "") {
+  const md = (t) => fileLinks(DOMPurify.sanitize(marked.parse(t, { breaks: false, gfm: true })), { base: cwd });
   let html = "";
   let toolRun = [];
   const flush = () => {
@@ -1960,12 +1961,224 @@ function openTaskDialog(task, done) {
   });
 }
 
+/* ---------------- file viewer ---------------- */
+
+/* Agents link to files by path (/root/x/report.md, docs/a.md:12, file:///…). Those open in the file viewer
+   (#/view?path=…), which shows the file the way Claude shows an artifact: markdown formatted, HTML pages run in a
+   sandbox, images, PDFs, tables, code. `goal` lets a Team goal's own folder be read too. */
+function localPath(href, base = "") {
+  if (!href) return null;
+  if (/^file:\/\//i.test(href)) href = href.slice(7);
+  else if (/^([a-z][a-z0-9+.-]*:|\/\/|#|\?)/i.test(href)) return null;
+  href = href.replace(/#.*$/, "").replace(/:\d+(:\d+)?$/, "");
+  try { href = decodeURIComponent(href); } catch { /* keep as written */ }
+  if (!href) return null;
+  if (!href.startsWith("/") && !href.startsWith("~")) {
+    if (!base) return null;
+    const parts = (base.replace(/\/+$/, "") + "/" + href).split("/");
+    const out = [];
+    for (const part of parts) {
+      if (part === "..") out.pop();
+      else if (part && part !== ".") out.push(part);
+    }
+    href = "/" + out.join("/");
+  }
+  return href;
+}
+
+function viewHref(path, goal = "") {
+  const q = new URLSearchParams({ path });
+  if (goal) q.set("goal", goal);
+  return "#/view?" + q.toString();
+}
+
+/* Point every file link in sanitized HTML at the viewer. `base` resolves relative links (else they're left alone). */
+function fileLinks(html, { base = "", goal = "" } = {}) {
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  for (const a of tpl.content.querySelectorAll("a[href]")) {
+    const path = localPath(a.getAttribute("href"), base);
+    if (!path) continue;
+    a.setAttribute("href", viewHref(path, goal));
+    a.removeAttribute("target");
+    a.classList.add("file-link");
+  }
+  // Bare paths in prose or `code` (/root/x/report.md) become links too, outside links and code blocks.
+  const PATH = /(^|[\s(“"'])((?:\/|~\/)[\w.@+~-]+(?:\/[\w.@+~-]+)*\.[A-Za-z0-9]{1,8})(?=$|[\s),.;:!?”"'])/g;
+  const walker = document.createTreeWalker(tpl.content, NodeFilter.SHOW_TEXT);
+  const hits = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (n.parentElement?.closest("a, pre") || !n.nodeValue.includes("/")) continue;
+    PATH.lastIndex = 0;
+    if (PATH.test(n.nodeValue)) hits.push(n);
+  }
+  for (const n of hits) {
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    n.nodeValue.replace(PATH, (m, pre, path, at) => {
+      const start = at + pre.length;
+      frag.append(n.nodeValue.slice(last, start));
+      const a = document.createElement("a");
+      a.className = "file-link";
+      a.href = viewHref(path, goal);
+      a.textContent = path;
+      frag.append(a);
+      last = start + path.length;
+      return m;
+    });
+    frag.append(n.nodeValue.slice(last));
+    n.replaceWith(frag);
+  }
+  return tpl.innerHTML;
+}
+
+const VIEW_KINDS = [
+  ["markdown", /\.(md|markdown|mdx)$/i], ["html", /\.(html?|xhtml)$/i], ["svg", /\.svg$/i],
+  ["image", /\.(png|jpe?g|gif|webp|avif|bmp|ico)$/i], ["pdf", /\.pdf$/i], ["table", /\.(csv|tsv)$/i],
+  ["json", /\.(json|jsonl|ipynb)$/i],
+  ["binary", /\.(zip|gz|tgz|xz|7z|rar|tar|exe|msi|dmg|iso|img|bin|so|dll|o|a|class|jar|apk|aab|db|sqlite|mp3|mp4|mov|mkv|wav|flac|ogg|webm|woff2?|ttf|otf|docx?|xlsx?|pptx?|intunewin)$/i],
+];
+const VIEW_MAX = 5 * 1024 * 1024;
+
+function viewerView(params) {
+  const path = params.get("path") || "";
+  const goal = params.get("goal") || "";
+  const name = path.split("/").pop() || path;
+  const dir = path.slice(0, path.length - name.length);
+  const kind = (VIEW_KINDS.find(([, re]) => re.test(name)) || ["text"])[0];
+  const src = (extra = {}) => {
+    const q = new URLSearchParams({ path, ...extra });
+    return goal ? `/api/team/goals/${encodeURIComponent(goal)}/file?${q}` : `/api/files/view?${q}`;
+  };
+  const back = goal ? `#/team/g/${encodeURIComponent(goal)}` : "";
+  let disposed = false, source = false, text = null;
+
+  setMain(`${topbar(name)}<div class="viewer">
+    <div class="viewer-bar">
+      <button class="btn small ghost" data-v="back" title="Back">←</button>
+      <div class="viewer-title"><b>${esc(name)}</b><span class="muted" title="${esc(path)}">${esc(dir)}</span></div>
+      <div class="viewer-btns">
+        ${["markdown", "html", "svg", "json", "table"].includes(kind) ? `<button class="btn small" data-v="source">Source</button>` : ""}
+        <button class="btn small" data-v="reload" title="Reload the file">Reload</button>
+        <button class="btn small" data-v="copy">Copy path</button>
+        <a class="btn small" href="${esc(src(kind === "html" ? { scripts: "true" } : {}))}" target="_blank" rel="noopener">Open</a>
+        <a class="btn small" href="${esc(src({ download: "true" }))}">Download</a>
+      </div>
+    </div>
+    <div class="viewer-body" id="vbody"><p class="muted">Loading…</p></div></div>`);
+
+  const body = () => $("#vbody");
+  const fail = (msg) => { if (!disposed) body().innerHTML = `<div class="viewer-msg"><p class="error">${esc(msg)}</p></div>`; };
+
+  async function fetchText() {
+    const res = await fetch(src(), { credentials: "same-origin" });
+    if (!res.ok) {
+      let msg = `Couldn't open the file (${res.status})`;
+      try { msg = (await res.json()).detail || msg; } catch { /* not JSON */ }
+      throw new Error(msg);
+    }
+    if (+res.headers.get("content-length") > VIEW_MAX) throw new Error("big");
+    return res.text();
+  }
+
+  function showSource() {
+    body().innerHTML = `<pre class="viewer-pre">${esc(text)}</pre>`;
+  }
+
+  function renderTable(t) {
+    const sep = /\.tsv$/i.test(name) ? "\t" : ",";
+    const rows = [];
+    let row = [], cell = "", q = false;
+    for (let i = 0; i < t.length && rows.length < 2000; i++) {
+      const c = t[i];
+      if (q) { if (c === '"' && t[i + 1] === '"') { cell += '"'; i++; } else if (c === '"') q = false; else cell += c; }
+      else if (c === '"') q = true;
+      else if (c === sep) { row.push(cell); cell = ""; }
+      else if (c === "\n" || c === "\r") { if (c === "\r" && t[i + 1] === "\n") i++; row.push(cell); rows.push(row); row = []; cell = ""; }
+      else cell += c;
+    }
+    if (cell || row.length) { row.push(cell); rows.push(row); }
+    const [head, ...rest] = rows;
+    return `<div class="viewer-table"><table><thead><tr>${(head || []).map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead>
+      <tbody>${rest.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+      ${rows.length >= 2000 ? `<p class="muted viewer-note">Showing the first 2,000 rows.</p>` : ""}`;
+  }
+
+  async function load() {
+    try {
+      if (kind === "html") {
+        body().innerHTML = `<iframe class="viewer-frame" sandbox="allow-scripts allow-popups allow-forms allow-modals allow-downloads"
+          referrerpolicy="no-referrer" src="${esc(src({ scripts: "true", t: Date.now() }))}" title="${esc(name)}"></iframe>`;
+        text = null;
+        return;
+      }
+      if (kind === "image" || kind === "svg") {
+        // An SVG shown as an image can't run scripts.
+        body().innerHTML = `<div class="viewer-media"><img alt="${esc(name)}" src="${esc(src({ t: Date.now() }))}"></div>`;
+        text = null;
+        return;
+      }
+      if (kind === "pdf") {
+        body().innerHTML = `<iframe class="viewer-frame" src="${esc(src({ t: Date.now() }))}" title="${esc(name)}"></iframe>`;
+        return;
+      }
+      if (kind === "binary") {
+        body().innerHTML = `<div class="viewer-msg"><p>This file can't be shown here.</p><a class="btn primary" href="${esc(src({ download: "true" }))}">Download ${esc(name)}</a></div>`;
+        return;
+      }
+      text = await fetchText();
+      if (disposed) return;
+      if (source) return showSource();
+      if (kind === "markdown") {
+        const html = DOMPurify.sanitize(marked.parse(text, { gfm: true }), { FORBID_TAGS: ["style", "form", "iframe", "object", "embed"] });
+        const tpl = document.createElement("template");
+        tpl.innerHTML = fileLinks(html, { base: dir, goal });
+        // Pictures next to the file load through the same route.
+        for (const img of tpl.content.querySelectorAll("img[src]")) {
+          const p = localPath(img.getAttribute("src"), dir);
+          if (p) img.setAttribute("src", goal ? `/api/team/goals/${encodeURIComponent(goal)}/file?path=${encodeURIComponent(p)}` : `/api/files/view?path=${encodeURIComponent(p)}`);
+        }
+        body().innerHTML = `<article class="viewer-doc">${tpl.innerHTML}</article>`;
+      } else if (kind === "table") {
+        body().innerHTML = renderTable(text);
+      } else if (kind === "json" && !/\.jsonl$/i.test(name)) {
+        let pretty = text;
+        try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch { /* show as written */ }
+        body().innerHTML = `<pre class="viewer-pre">${esc(pretty)}</pre>`;
+      } else {
+        showSource();
+      }
+    } catch (e) {
+      if (e.message === "big") {
+        body().innerHTML = `<div class="viewer-msg"><p>This file is over 5 MB, too big to show here.</p><a class="btn primary" href="${esc(src())}" target="_blank" rel="noopener">Open it in a new tab</a></div>`;
+      } else fail(e.message);
+    }
+  }
+
+  $(".viewer").addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-v]");
+    if (!b) return;
+    const v = b.dataset.v;
+    if (v === "back") { if (history.length > 1) history.back(); else location.hash = back || "#/"; }
+    else if (v === "copy") copyWithToast(path, "Path copied");
+    else if (v === "reload") load();
+    else if (v === "source") {
+      source = !source;
+      b.classList.toggle("primary", source);
+      if (source && text == null) { try { text = await fetchText(); } catch (err) { return fail(err.message === "big" ? "Too big to show here" : err.message); } }
+      if (source) showSource(); else load();
+    }
+  });
+  load();
+  return { dispose() { disposed = true; } };
+}
+
 /* ---------------- plugins ---------------- */
 
 // Optional plugins (SIDUS_PLUGINS) add a sidebar link, a script, and hash routes through window.sidus.
 const pluginRoutes = [];
 window.sidus = {
-  api, esc, toast, fmt, state, topbar, setMain, toggleSide, loadSessions,
+  api, esc, toast, fmt, state, topbar, setMain, toggleSide, loadSessions, localPath, viewHref, fileLinks,
   registerRoute(pattern, view) { pluginRoutes.push({ pattern, view }); },
 };
 

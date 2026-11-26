@@ -530,3 +530,33 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 .dialog [hidden] { display: none !important; }
 #task-form textarea { width: 100%; font: 13.5px/1.5 var(--sans); }
 @media (max-width: 520px) { .task-grid { grid-template-columns: 1fr; } }
+
+/* file viewer */
+.viewer { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.viewer-bar {
+  display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border);
+  background: var(--surface); flex-wrap: wrap;
+}
+.viewer-title { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.25; }
+.viewer-title b, .viewer-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viewer-title span { font-size: 12px; }
+.viewer-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.viewer-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+.viewer-frame { flex: 1; width: 100%; border: 0; background: #fff; min-height: 70vh; }
+.viewer-doc { max-width: 860px; width: 100%; margin: 0 auto; padding: 24px 28px 60px; box-sizing: border-box; word-break: break-word; }
+.viewer-doc img { max-width: 100%; }
+.viewer-doc pre { background: var(--surface-2); padding: 10px 12px; border-radius: 9px; overflow-x: auto; }
+.viewer-doc code { background: var(--surface-2); padding: 1px 4px; border-radius: 4px; }
+.viewer-doc pre code { background: none; padding: 0; }
+.viewer-doc table, .viewer-table table { border-collapse: collapse; }
+.viewer-doc table { display: block; overflow-x: auto; }
+.viewer-doc th, .viewer-doc td, .viewer-table th, .viewer-table td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
+.viewer-doc blockquote { margin-left: 0; padding-left: 14px; border-left: 3px solid var(--border); color: var(--text-2); }
+.viewer-table { padding: 16px; overflow: auto; font-size: 13px; }
+.viewer-table th { position: sticky; top: 0; background: var(--surface-2); }
+.viewer-pre { margin: 0; padding: 16px 20px; font: 12.5px/1.55 var(--mono, ui-monospace, monospace); white-space: pre-wrap; word-break: break-word; }
+.viewer-media { padding: 20px; display: flex; justify-content: center; }
+.viewer-media img { max-width: 100%; height: auto; background: repeating-conic-gradient(#8881 0 25%, transparent 0 50%) 0 0 / 16px 16px; }
+.viewer-msg { padding: 40px 20px; text-align: center; }
+.viewer-note { padding: 0 16px; }
+@media (max-width: 720px) { .viewer-doc { padding: 16px 16px 40px; } }
