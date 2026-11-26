@@ -755,3 +755,24 @@ async def manifest():
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+
+# ---------- old file links ----------
+
+_FILE_PATH = re.compile(r"^/(?!api/|static/)[^?#]*[^/]\.[A-Za-z0-9]{1,8}$")
+
+
+@app.exception_handler(404)
+async def not_found(request: Request, exc):
+    """A link an agent wrote as a bare path (https://sidus/root/x/report.md) lands here: send it to the file
+    viewer instead of a JSON 404. Files in a Team goal's folder carry the goal so the viewer can read them."""
+    path = request.url.path
+    if request.method == "GET" and _FILE_PATH.match(path):
+        q = {"path": path}
+        team = os.path.realpath(settings.data_dir / "team")
+        m = re.match(re.escape(team) + r"/([0-9a-f]{6,32})/", os.path.realpath(path))
+        if m:
+            q["goal"] = m.group(1)
+        return RedirectResponse("/#/view?" + urlencode(q), status_code=302)
+    detail = getattr(exc, "detail", None) or "Not Found"
+    return JSONResponse({"detail": detail}, status_code=404, headers=getattr(exc, "headers", None))
