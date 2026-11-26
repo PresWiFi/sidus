@@ -44,6 +44,10 @@ On first start Sidus creates these in its data folder:
 You can pause, resume, stop the current run, cancel, add a note to any task (the next worker reads it), retry or
 skip a task, add a task to a phase, or skip a phase.
 
+## Files
+
+The goal page lists the files the agents wrote, edited or linked to that still exist, newest first. Those files, and any file path in a report, open in the file viewer. It can read files in `SIDUS_WORKSPACES` and the goal's own folder under the data directory.
+
 ## Shared context
 
 Everyone works from the same things:

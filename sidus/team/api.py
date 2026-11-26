@@ -3,7 +3,6 @@ uses the bearer token, which only works for /api/team/mcp/*."""
 from __future__ import annotations
 
 import asyncio
-import mimetypes
 import os
 import re
 import shutil
@@ -67,8 +66,10 @@ def _summary(goal: dict) -> dict:
 def _detail(goal: dict) -> dict:
     tasks = db.tasks(goal["id"])
     phases = [{**p, "tasks": [t for t in tasks if t["phase_id"] == p["id"]]} for p in db.phases(goal["id"])]
-    return {**_summary(goal), "goal": goal["goal"], "phases": phases, "runs": [_live(r) for r in db.runs(goal["id"])],
-            "comments": db.comments(goal["id"])}
+    runs = [_live(r) for r in db.runs(goal["id"])]
+    comments = db.comments(goal["id"])
+    return {**_summary(goal), "goal": goal["goal"], "phases": phases, "runs": runs,
+            "comments": comments, "artifacts": _artifacts(goal, runs, comments)}
 
 
 # ---------- overview / settings ----------
@@ -163,38 +164,66 @@ async def runbook(goal_id: str):
     path = goal["runbook"] if os.path.isabs(goal["runbook"]) else os.path.join(goal["cwd"], goal["runbook"])
     if not os.path.isfile(path):
         raise HTTPException(404, "The runbook file is gone")
-    return _inline(path)
-
-
-_TEXT_TYPES = {"application/json", "application/xml", "application/x-yaml", "application/yaml", "application/toml",
-               "application/x-sh", "application/javascript", "application/x-python-code"}
-
-
-def _inline(path: str) -> FileResponse:
-    """Show a file in the browser. Text of any kind (markdown, logs, code, no extension) goes out as text/plain so the
-    browser displays it instead of downloading it."""
-    kind, _ = mimetypes.guess_type(path)
-    if kind is None or kind in _TEXT_TYPES or (kind.startswith("text/") and kind != "text/html"):
-        kind = "text/plain; charset=utf-8"
-    resp = FileResponse(path, media_type=kind, filename=Path(path).name, content_disposition_type="inline")
-    resp.headers["Content-Security-Policy"] = "sandbox"  # never run an agent's or uploaded HTML/JS in Sidus's origin
-    resp.headers["X-Content-Type-Options"] = "nosniff"
-    return resp
+    return files.inline_response(path)
 
 
 @router.get("/goals/{goal_id}/file")
-async def goal_file(goal_id: str, path: str):
+async def goal_file(goal_id: str, path: str, scripts: bool = False, download: bool = False):
     """A file an agent linked to in its report: absolute, or relative to the goal's folder. Allowed inside the
     configured workspaces and inside the goal's own Team folder (goal.md, STATUS.md, the runbook)."""
     goal = _goal(goal_id)
     path = os.path.expanduser(path.strip())
     real = os.path.realpath(path if os.path.isabs(path) else os.path.join(goal["cwd"], path))
-    own = os.path.realpath(settings.data_dir / "team" / goal_id)
-    if not (files.inside_workspace(real) or real == own or real.startswith(own + os.sep)):
+    if not _allowed(goal, real):
         raise HTTPException(403, "Outside the configured workspaces (SIDUS_WORKSPACES)")
     if not os.path.isfile(real):
         raise HTTPException(404, f"File not found: {real}")
-    return _inline(real)
+    return files.inline_response(real, scripts=scripts, download=download)
+
+
+def _allowed(goal: dict, path: str) -> bool:
+    own = os.path.realpath(settings.data_dir / "team" / goal["id"])
+    real = os.path.realpath(path)
+    return files.inside_workspace(real) or real.startswith(own + os.sep)
+
+
+_LINK = re.compile(r"\]\(<?([^)\s>]+)>?\)")
+
+
+def _linked(text: str, cwd: str) -> list[str]:
+    """Local files a markdown text links to: [x](/abs/path), [x](rel/path:12), [x](file:///abs)."""
+    out = []
+    for href in _LINK.findall(text or ""):
+        if href.startswith("file://"):
+            href = href[7:]
+        elif re.match(r"^([a-z][a-z0-9+.-]*:|//|#|\?)", href, re.I):
+            continue
+        href = re.sub(r":\d+(:\d+)?$", "", href.split("#")[0])
+        if href:
+            out.append(os.path.normpath(os.path.join(cwd, os.path.expanduser(href))))
+    return out
+
+
+def _artifacts(goal: dict, runs: list[dict], comments: list[dict]) -> list[dict]:
+    """Files the agents wrote, edited or linked to for this goal that still exist, newest first."""
+    seen, out = set(), []
+    paths = [f for r in runs for f in (r.get("files") or [])]
+    paths += [f for r in runs for f in _linked(r.get("result") or "", goal["cwd"])]
+    paths += [f for c in comments if c.get("author") != "you" for f in _linked(c.get("text") or "", goal["cwd"])]
+    for f in paths:
+        if not isinstance(f, str) or not os.path.isabs(f) or f in seen:
+            continue
+        seen.add(f)
+        try:
+            st = os.stat(f)
+        except OSError:
+            continue
+        if not os.path.isfile(f) or not _allowed(goal, f):
+            continue
+        rel = os.path.relpath(f, goal["cwd"])
+        out.append({"path": f, "name": rel if not rel.startswith("..") else f, "size": st.st_size,
+                    "mtime": st.st_mtime})
+    return sorted(out, key=lambda x: -x["mtime"])
 
 
 class GoalIn(BaseModel):

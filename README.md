@@ -18,6 +18,7 @@ If Sidus is useful to you, [star the repository](https://github.com/PresWiFi/sid
 - **Scheduled tasks**: send a prompt to a session every hour, day, week, or on a cron schedule.
 - **GitHub without SSH keys**: sign in once, then clone, pull, and push from any session.
 - **File uploads and downloads** for each session's folder.
+- **File viewer**: file paths the agents mention in transcripts and Team reports open in Sidus. Markdown is formatted, HTML pages run in a sandbox, and images, PDFs, CSV tables and code are shown as they are.
 - **One owner account**, with optional SSO (Authentik, Microsoft, Google, Keycloak, Duo, or any OpenID Connect provider).
 
 | Session terminal | Transcript | Phone |

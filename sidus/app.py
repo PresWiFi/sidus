@@ -109,7 +109,8 @@ async def guard(request: Request, call_next):
     response = await call_next(request)
     if path == "/" or path.endswith((".js", ".css", ".html")):
         response.headers["Cache-Control"] = "no-cache"
-    response.headers["X-Frame-Options"] = "DENY"
+    if "X-Frame-Options" not in response.headers:    # files for the viewer allow SAMEORIGIN
+        response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     return response
 
@@ -657,6 +658,16 @@ async def files_download(path: str, inline: bool = False):
     resp.headers["Content-Security-Policy"] = "sandbox"  # never run uploaded HTML/JS in Sidus's origin
     resp.headers["X-Content-Type-Options"] = "nosniff"
     return resp
+
+
+@app.get("/api/files/view")
+async def files_view(path: str, scripts: bool = False, download: bool = False):
+    """The file viewer's source: a workspace file shown inline (see files.inline_response)."""
+    try:
+        real = await asyncio.to_thread(files.download_path, os.path.expanduser(path.strip()))
+    except files.FileError as e:
+        _err(e, e.code)
+    return files.inline_response(real, scripts=scripts, download=download)
 
 
 @app.post("/api/files/upload")

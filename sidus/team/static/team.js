@@ -14,30 +14,18 @@
       "input", "button", "textarea", "select", "style", "link", "meta"],
     FORBID_ATTR: ["style", "srcset"],
   };
-  // Agents link to files by path (/root/x/report.md, docs/a.md:12, file:///…). Point those at the goal's file route;
-  // left alone, the browser asks Sidus for /root/x/report.md and gets a 404.
-  let fileGoal = null;
-  const fileUrl = (path) => `${BASE}/goals/${fileGoal}/file?path=${encodeURIComponent(path)}`;
-  const localPath = (href) => {
-    if (/^file:\/\//i.test(href)) href = href.slice(7);
-    else if (/^([a-z][a-z0-9+.-]*:|\/\/|#)/i.test(href)) return null;
-    href = href.replace(/#.*$/, "").replace(/:\d+(:\d+)?$/, "");
-    try { href = decodeURIComponent(href); } catch { /* keep as written */ }
-    return href || null;
+  // Agents link to files by path; those open in Sidus's file viewer, which can also read the goal's own folder.
+  let fileGoal = null, fileBase = "";
+  const md = (text) => H.fileLinks(DOMPurify.sanitize(marked.parse(text || "", { gfm: true, breaks: true }), PURIFY),
+    { base: fileBase, goal: fileGoal });
+  const fileLink = (f) => {
+    const path = H.localPath(f, fileBase);
+    return path ? `<a class="file-link" href="${esc(H.viewHref(path, fileGoal))}">${esc(f)}</a>` : esc(f);
   };
-  const md = (text) => {
-    const tpl = document.createElement("template");
-    tpl.innerHTML = DOMPurify.sanitize(marked.parse(text || "", { gfm: true, breaks: true }), PURIFY);
-    if (fileGoal) for (const a of tpl.content.querySelectorAll("a[href]")) {
-      const path = localPath(a.getAttribute("href"));
-      if (!path) continue;
-      a.setAttribute("href", fileUrl(path));
-      a.setAttribute("target", "_blank");
-      a.setAttribute("rel", "noopener");
-    }
-    return tpl.innerHTML;
-  };
-  const fileLink = (path) => `<a href="${esc(fileUrl(path))}" target="_blank" rel="noopener">${esc(path)}</a>`;
+  const size = (n) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+  const artifactsHtml = (g) => !g.artifacts?.length ? "" : `<h2 class="group-label">Files</h2><div class="card t-files">${g.artifacts.map((f) =>
+    `<a class="t-file" href="${esc(H.viewHref(f.path, g.id))}" title="${esc(f.path)}"><span class="t-file-name">${esc(f.name)}</span>
+      <span class="muted t-small">${size(f.size)} · ${fmt.ago(f.mtime)}</span></a>`).join("")}</div>`;
   const agent = (a) => (a && a !== "any" ? `<span class="t-agent t-${a}">${LABEL[a]}</span>` : `<span class="badge">Either</span>`);
   const tokens = (n) => (n ? `<span class="muted t-tok" title="New (uncached) input plus output tokens, as the agents reported them">${fmt.tokens(n)} tokens</span>` : "");
   const isEditing = () => {
@@ -253,6 +241,7 @@
 
     function render(g) {
       fileGoal = g.id;
+      fileBase = g.cwd;
       const actions = {
         planning: `<button class="btn" data-a="stop">Stop</button>`,
         questions: "", proposed: `<button class="btn ghost" data-a="replan">Re-plan</button><button class="btn primary" data-a="approve">Approve and start</button>`,
@@ -266,7 +255,7 @@
       $("#team").innerHTML = `<div class="t-head"><div>
           <a class="t-back" href="#/team">← Team</a>
           <h1>${esc(g.title)}</h1>
-          <div class="muted t-small">${esc(g.cwd)}${g.runbook ? ` · <a href="${BASE}/goals/${g.id}/runbook" target="_blank" rel="noopener">Runbook: ${esc(g.runbook.split("/").pop())}</a>` : ""}</div>
+          <div class="muted t-small">${esc(g.cwd)}${g.runbook ? ` · <a href="${esc(H.viewHref(H.localPath(g.runbook, g.cwd) || g.runbook, g.id))}">Runbook: ${esc(g.runbook.split("/").pop())}</a>` : ""}</div>
           <div class="t-meta">${badge(GOAL_STATUS, g.status)}${g.manager ? `<span class="t-small">Manager</span>${agent(g.manager)}` : ""}${g.phases_total ? `<span class="muted t-small">${g.phases_done}/${g.phases_total} phases</span>` : ""}${tokens(g.tokens)}</div></div>
         <div class="t-head-actions">${actions}${end}</div></div>
         ${g.waiting ? `<p class="badge warn t-waiting">${esc(g.waiting)}</p>` : ""}
@@ -274,6 +263,7 @@
         ${g.status === "questions" ? `<div class="card t-questions"><h2>The manager asks</h2><div class="t-md">${md(g.questions)}</div>
           <form id="t-answer"><textarea name="text" rows="4" required placeholder="Your answers"></textarea><button class="btn primary">Send answers</button></form></div>` : ""}
         ${g.summary && ["proposed", "done"].includes(g.status) ? `<div class="card"><div class="t-md">${md(g.summary)}</div></div>` : ""}
+        ${artifactsHtml(g)}
         <h2 class="group-label">Phases</h2>
         ${g.status === "proposed" ? `<div id="t-edit">${g.phases.map((p, i) => phaseEditor(p, i + 1)).join("")}<button class="btn small" data-a="addphase">Add a phase</button></div>`
           : (g.phases.map((p) => phaseCard(p, g)).join("") || `<p class="muted">${g.status === "planning" ? "The manager is outlining…" : "No phases."}</p>`)}

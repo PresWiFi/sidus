@@ -395,3 +395,14 @@ def test_goal_file(team, client, anon, tmp_path):
     assert client.get(f"/api/team/goals/{gid}/file", params={"path": "docs/missing.md"}).status_code == 404
     assert client.get("/api/team/goals/nope/file", params={"path": absolute}).status_code == 404
     assert anon.get(f"/api/team/goals/{gid}/file", params={"path": absolute}).status_code == 401
+    # The goal lists the files its agents wrote that still exist, inside the allowed places.
+    run = db.runs(gid)[0]
+    db.conn().execute("UPDATE team_runs SET files = ? WHERE id = ?",
+                      (json.dumps([absolute, str(outside), absolute + ".gone"]), run["id"]))
+    db.conn().commit()
+    Path(team["cwd"], "docs", "linked.md").write_text("x")
+    db.comment(gid, "claude", "Wrote [notes](docs/linked.md:3) and [site](https://example.com).")
+    db.comment(gid, "you", "See [mine](docs/missing-mine.md)")
+    arts = client.get(f"/api/team/goals/{gid}").json()["artifacts"]
+    assert sorted((a["path"], a["name"]) for a in arts) == [
+        (str(Path(team["cwd"], "docs", "linked.md")), "docs/linked.md"), (absolute, "docs/report.md")]
